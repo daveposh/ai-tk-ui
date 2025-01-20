@@ -1,0 +1,32 @@
+# AI-Toolkit directory
+/ai-toolkit/
+ai-toolkit/
+ai-toolkit
+
+# Configuration and sensitive files
+config.yaml
+config.txt
+last_settings.json
+*.json        # Add this to prevent any JSON files from being tracked
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Windows
+Thumbs.db
+desktop.ini 
