@@ -73,10 +73,6 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Initialize variables
         self.initialize_variables()
         
-        # Add seed variable
-        self.seed_var = tk.StringVar(value="-1")
-        self.use_fixed_seed_var = tk.BooleanVar(value=False)
-        
         # Create main layout
         self.create_widgets()
         
@@ -84,14 +80,23 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.pack(fill="both", expand=True)
         self.grid_columnconfigure(0, weight=1)
         
+        # Add trace to data_folder_var before loading settings
+        self.data_folder_var.trace_add("write", lambda *args: self.update_dataset_stats(self.data_folder_var.get()))
+        
+        # Add trace to lr_var to update steps when learning rate changes
+        self.lr_var.trace_add("write", lambda *args: self.update_steps_on_lr_change())
+        
+        # Add traces to all variables to auto-save settings
+        self.setup_auto_save_traces()
+        
         # Load settings after widgets are created
         self.load_last_settings()
         
         if config:
             self.load_config(config)
         
-        # Add trace to data_folder_var
-        self.data_folder_var.trace_add("write", lambda *args: self.update_dataset_stats(self.data_folder_var.get()))
+        # Explicitly update dataset stats after loading settings/config
+        self.update_dataset_stats(self.data_folder_var.get())
         
         # Now apply theme after all widgets are created
         self.themes.apply_theme(self.master, self.is_dark_mode)
@@ -108,23 +113,53 @@ class FluxTrainingGUI(ctk.CTkFrame):
         """Initialize all variables used in the GUI"""
         # Initialize learning rate presets
         self.lr_presets = {
-            '1e-4 (Standard)': {'value': '1e-4', 'description': 'Standard learning rate for most cases'},
-            '2e-4 (Faster)': {'value': '2e-4', 'description': 'Faster learning, may be less stable'},
-            '5e-5 (Conservative)': {'value': '5e-5', 'description': 'More conservative, more stable'},
-            '3e-5 (Very Conservative)': {'value': '3e-5', 'description': 'Very conservative, very stable'},
-            '2e-5 (Minimal)': {'value': '2e-5', 'description': 'Minimal changes, highest stability'}
+            '1e-4 (Standard)': {
+                'value': '1e-4', 
+                'description': 'Standard learning rate for most cases',
+                'repeats': 150,
+                'info': 'Each image will be seen ~150 times'
+            },
+            '2e-4 (Faster)': {
+                'value': '2e-4', 
+                'description': 'Faster learning, may be less stable',
+                'repeats': 100,
+                'info': 'Each image will be seen ~100 times'
+            },
+            '5e-5 (Conservative)': {
+                'value': '5e-5', 
+                'description': 'More conservative, more stable',
+                'repeats': 200,
+                'info': 'Each image will be seen ~200 times'
+            },
+            '3e-5 (Very Conservative)': {
+                'value': '3e-5', 
+                'description': 'Very conservative, very stable',
+                'repeats': 250,
+                'info': 'Each image will be seen ~250 times'
+            },
+            '2e-5 (Minimal)': {
+                'value': '2e-5', 
+                'description': 'Minimal changes, highest stability',
+                'repeats': 300,
+                'info': 'Each image will be seen ~300 times'
+            }
         }
         
         # Initialize containers
         self.step_buttons = []
-        self.resolution_vars = {}
+        self.resolution_vars = {
+            "512x512": {"var": tk.BooleanVar(value=True), "description": "Standard training resolution"},
+            "1024x1024": {"var": tk.BooleanVar(value=False), "description": "High resolution training"},
+            "1280x1280": {"var": tk.BooleanVar(value=False), "description": "Very high resolution"},
+            "1536x1536": {"var": tk.BooleanVar(value=False), "description": "Ultra high resolution"}
+        }
         
         # Initialize all variables with defaults
         self.name_var = tk.StringVar(value='')
         self.trigger_word_var = tk.StringVar(value='')
         self.data_folder_var = tk.StringVar(value='')
         self.output_folder_var = tk.StringVar(value='')
-        self.lr_var = tk.StringVar(value='1e-4')
+        self.lr_var = tk.StringVar(value='1e-4 (Standard)')
         self.custom_lr_var = tk.StringVar()
         self.training_steps_var = tk.StringVar(value='1000')
         self.auto_steps_var = tk.BooleanVar(value=True)
@@ -141,6 +176,8 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.dataset_stats_var = tk.StringVar(value='')
         self.enable_sampling_var = tk.BooleanVar(value=True)
         self.sample_every_var = tk.StringVar(value="500")
+        self.seed_var = tk.StringVar(value="42")
+        self.use_fixed_seed_var = tk.BooleanVar(value=True)
         
         # Network variables
         self.network_type_var = tk.StringVar(value="lora")
@@ -156,6 +193,10 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.grad_checkpointing_var = tk.BooleanVar(value=True)
         self.noise_scheduler_var = tk.StringVar(value="flowmatch")
         self.optimizer_var = tk.StringVar(value="adamw8bit")
+        
+        # Add progress tracking variables
+        self.step_var = tk.StringVar(value="Step: 0/0")
+        self.status_var = tk.StringVar(value="Ready")
 
     def _on_mousewheel(self, event):
         """Handle mousewheel scrolling"""
@@ -173,16 +214,16 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Configure grid weights for main frame
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
-        
+
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         )
-        
+
         # Create window in canvas and make it expand
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw", width=self.canvas.winfo_width())
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        
+
         # Configure canvas to expand
         self.canvas.pack(side="left", fill="both", expand=True)
         self.scrollbar.pack(side="right", fill="y")
@@ -197,7 +238,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
         self.canvas.bind_all("<Button-4>", self._on_mousewheel)
         self.canvas.bind_all("<Button-5>", self._on_mousewheel)
-
+        
     def _on_canvas_configure(self, event):
         """Handle canvas resize"""
         # Update the width of the window in the canvas
@@ -272,6 +313,48 @@ class FluxTrainingGUI(ctk.CTkFrame):
         ctk.CTkCheckBox(model_options_frame, text="Is Flux", variable=self.is_flux_var).pack(side='left', padx=5)
         ctk.CTkCheckBox(model_options_frame, text="Quantize", variable=self.quantize_var).pack(side='left', padx=5)
         
+        # Dataset Configuration
+        dataset_frame = ctk.CTkFrame(left_column)
+        dataset_frame.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkLabel(dataset_frame, text="Dataset Settings").pack(anchor='w', padx=5, pady=2)
+        
+        # Data folder selection
+        data_folder_frame = ctk.CTkFrame(dataset_frame)
+        data_folder_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(data_folder_frame, text="Data Folder:").pack(side='left')
+        ctk.CTkEntry(data_folder_frame, textvariable=self.data_folder_var).pack(side='left', fill='x', expand=True, padx=5)
+        ctk.CTkButton(data_folder_frame, text="Browse", command=lambda: self.browse_folder('data'), **button_style).pack(side='right')
+        
+        # Dataset statistics
+        stats_frame = ctk.CTkFrame(dataset_frame)
+        stats_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(stats_frame, text="Dataset Stats:").pack(side='left', padx=5)
+        ctk.CTkLabel(stats_frame, textvariable=self.dataset_stats_var).pack(side='left', padx=5)
+        
+        # Output folder selection
+        output_folder_frame = ctk.CTkFrame(dataset_frame)
+        output_folder_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(output_folder_frame, text="Output Folder:").pack(side='left')
+        ctk.CTkEntry(output_folder_frame, textvariable=self.output_folder_var).pack(side='left', fill='x', expand=True, padx=5)
+        ctk.CTkButton(output_folder_frame, text="Browse", command=lambda: self.browse_folder('output'), **button_style).pack(side='right')
+        
+        # Dataset options
+        dataset_options_frame = ctk.CTkFrame(dataset_frame)
+        dataset_options_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkCheckBox(dataset_options_frame, text="Convert UTF-8", variable=self.convert_utf8_var).pack(side='left', padx=5)
+        
+        # Add resolution settings to dataset frame
+        resolution_frame = ctk.CTkFrame(dataset_frame)
+        resolution_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(resolution_frame, text="Training Resolutions:").pack(anchor='w', padx=5)
+        
+        # Create resolution checkboxes
+        for res, data in self.resolution_vars.items():
+            checkbox = ctk.CTkCheckBox(resolution_frame, text=res, variable=data['var'])
+            checkbox.pack(side='left', padx=5)
+            CreateToolTip(checkbox, data['description'])
+        
         # Network Settings
         network_frame = ctk.CTkFrame(left_column)
         network_frame.pack(fill='x', padx=5, pady=5)
@@ -312,10 +395,22 @@ class FluxTrainingGUI(ctk.CTkFrame):
         lr_frame = ctk.CTkFrame(training_config_frame)
         lr_frame.pack(fill='x', padx=5, pady=2)
         ctk.CTkLabel(lr_frame, text="Learning Rate:").pack(side='left')
-        ctk.CTkOptionMenu(lr_frame, 
+        lr_menu = ctk.CTkOptionMenu(lr_frame, 
                          variable=self.lr_var, 
                          values=list(self.lr_presets.keys()),
-                         **option_menu_style).pack(side='left', padx=5)
+                         **option_menu_style)
+        lr_menu.pack(side='left', padx=5)
+        
+        # Add info label for learning rate
+        self.lr_info_label = ctk.CTkLabel(lr_frame, text=self.lr_presets[self.lr_var.get()]['info'])
+        self.lr_info_label.pack(side='left', padx=5)
+        
+        # Update info label when learning rate changes
+        def update_lr_info(*args):
+            self.lr_info_label.configure(text=self.lr_presets[self.lr_var.get()]['info'])
+            self.update_steps_on_lr_change()
+        
+        self.lr_var.trace_add("write", update_lr_info)
         
         # Training Options
         options_frame = ctk.CTkFrame(training_config_frame)
@@ -363,7 +458,6 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.progress_bar.pack(fill='x', padx=5, pady=5)
         self.progress_bar.set(0)
         
-        self.status_var = tk.StringVar(value="Ready")
         self.status_label = ctk.CTkLabel(progress_frame, textvariable=self.status_var)
         self.status_label.pack(anchor='w', padx=5)
         
@@ -539,7 +633,14 @@ class FluxTrainingGUI(ctk.CTkFrame):
         lr_value = self.lr_presets[selected_lr]['value'] if selected_lr in self.lr_presets else selected_lr
         
         # Get selected resolutions
-        selected_resolutions = [res for res, data in self.resolution_vars.items() if data['var'].get()]
+        selected_resolutions = []
+        for res, data in self.resolution_vars.items():
+            if data['var'].get():
+                size = int(res.split('x')[0])
+                selected_resolutions.append(size)  # Just append the size, not a list
+        
+        if not selected_resolutions:  # If no resolution selected, default to 512
+            selected_resolutions = [512]
         
         # Prepare sample config
         sample_config = None
@@ -561,7 +662,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
                 'sample_steps': int(self.sampling_steps_var.get())
             }
         
-        return {
+        config = {
             'job': 'extension',
             'config': {
                 'name': self.name_var.get(),
@@ -583,11 +684,12 @@ class FluxTrainingGUI(ctk.CTkFrame):
                     },
                     'datasets': [{
                         'folder_path': self.data_folder_var.get(),
-                        'caption_ext': 'txt',
+                        'caption_ext': '.txt',
                         'caption_dropout_rate': 0.05,
                         'shuffle_tokens': False,
                         'cache_latents_to_disk': True,
-                        'resolution': [int(res.split('x')[0]) for res, data in self.resolution_vars.items() if data['var'].get()]
+                        'resolution': selected_resolutions[0],  # Use first selected resolution
+                        'keep_tokens': 1
                     }],
                     'train': {
                         'batch_size': int(self.batch_size_var.get()),
@@ -618,48 +720,102 @@ class FluxTrainingGUI(ctk.CTkFrame):
                 'version': '1.0'
             }
         }
+        return config
 
     def save_config(self):
         """Save the current configuration to a YAML file"""
         config = self.prepare_config()
         
+        # Get the output folder and name from the current settings
+        output_folder = self.output_folder_var.get()
+        name = self.name_var.get()
+        
+        if not output_folder:
+            messagebox.showerror("Error", "Please set an output folder first.")
+            return
+            
+        if not name:
+            messagebox.showerror("Error", "Please set a name for the configuration.")
+            return
+            
+        # Create output folder if it doesn't exist
+        os.makedirs(output_folder, exist_ok=True)
+        
+        # Default file path in output folder
+        default_path = os.path.join(output_folder, f"{name}_config.yaml")
+        
         file_path = filedialog.asksaveasfilename(
+            initialdir=output_folder,
+            initialfile=f"{name}_config.yaml",
             defaultextension=".yaml",
             filetypes=[("YAML files", "*.yaml"), ("All files", "*.*")]
         )
         
-        if file_path:
-            try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-                self.current_config_path = file_path
-                self.current_config_label_var.set(f"Loaded: {os.path.basename(file_path)}")
-                messagebox.showinfo("Success", "Configuration saved successfully!")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to save configuration: {str(e)}")
+        # If user cancels, use default path
+        if not file_path:
+            file_path = default_path
+        
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            self.current_config_path = file_path
+            self.current_config_label_var.set(f"Loaded: {os.path.basename(file_path)}")
+            messagebox.showinfo("Success", "Configuration saved successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save configuration: {str(e)}")
 
     def start_training(self):
         """Start the training process with progress updates"""
         try:
+            # Validate required fields
+            if not self.model_path_var.get():
+                messagebox.showerror("Error", "Please select a model path.")
+                return
+            if not self.data_folder_var.get():
+                messagebox.showerror("Error", "Please select a data folder.")
+                return
+            if not self.output_folder_var.get():
+                messagebox.showerror("Error", "Please select an output folder.")
+                return
+            if not self.name_var.get():
+                messagebox.showerror("Error", "Please enter a name for the training.")
+                return
+
             config = self.prepare_config()
             total_steps = int(self.steps_var.get())
-            
+
             # Create output folder if it doesn't exist
             os.makedirs(self.output_folder_var.get(), exist_ok=True)
             
-            # Save or update config file
-            if self.current_config_path:
-                config_path = self.current_config_path
-                with open(config_path, 'w', encoding='utf-8') as f:
-                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            else:
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_config:
-                    yaml.dump(config, temp_config, default_flow_style=False, sort_keys=False)
-                    config_path = temp_config.name
+            # Save config file in output folder
+            config_path = os.path.join(self.output_folder_var.get(), f"{self.name_var.get()}_config.yaml")
+            with open(config_path, 'w', encoding='utf-8') as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
             
-            # Get the path to run.py
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            train_script = os.path.join(script_dir, "run.py")
+            # Read AI toolkit path from config.txt
+            config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt")
+            if not os.path.exists(config_file):
+                messagebox.showerror("Error", "Could not find config.txt. Please ensure the startup script created it properly.")
+                return
+                
+            try:
+                with open(config_file, 'r') as f:
+                    toolkit_path = f.read().strip()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to read config.txt: {str(e)}")
+                return
+            
+            # Get the path to run.py from the AI toolkit installation
+            train_script = os.path.join(toolkit_path, "run.py")
+            
+            if not os.path.exists(train_script):
+                messagebox.showerror("Error", f"Could not find run.py at {train_script}. Please ensure the AI toolkit path in config.txt is correct.")
+                return
+            
+            # Reset progress
+            self.progress_bar.set(0)
+            self.status_var.set("Starting training...")
+            self.step_var.set(f"Step: 0/{total_steps}")
             
             # Start training process with pipe for output
             process = subprocess.Popen([sys.executable, train_script, config_path],
@@ -676,26 +832,34 @@ class FluxTrainingGUI(ctk.CTkFrame):
                     if not line and process.poll() is not None:
                         break
                     
+                    print(line.strip())  # Print output for debugging
+                    
                     # Parse progress from output
                     if "Step:" in line:
                         try:
                             current_step = int(line.split("Step:")[1].split("/")[0])
-                            self.update_progress(current_step, total_steps)
-                        except:
-                            pass
+                            progress = (current_step / total_steps) if total_steps > 0 else 0
+                            self.progress_bar.set(progress)
+                            self.step_var.set(f"Step: {current_step}/{total_steps}")
+                            self.status_var.set("Training in progress...")
+                        except Exception as e:
+                            print(f"Error parsing progress: {str(e)}")
                     
                     # Update status with any errors
                     if process.poll() is not None:
                         error = process.stderr.read()
                         if error:
+                            print(f"Error output: {error}")  # Print error for debugging
                             self.status_var.set(f"Error: {error.strip()}")
                         break
                 
-                # Training completed
+                # Training completed or failed
                 if process.returncode == 0:
-                    self.update_progress(total_steps, total_steps, "Training completed")
+                    self.progress_bar.set(1.0)
+                    self.step_var.set(f"Step: {total_steps}/{total_steps}")
+                    self.status_var.set("Training completed successfully!")
                 else:
-                    self.status_var.set("Training failed")
+                    self.status_var.set("Training failed. Check console for errors.")
             
             # Start progress monitoring in a separate thread
             progress_thread = threading.Thread(target=monitor_progress)
@@ -706,6 +870,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start training: {str(e)}")
+            print(f"Exception details: {str(e)}")  # Print exception for debugging
 
     def update_progress(self, current_step, total_steps, status="Training"):
         """Update the progress display"""
@@ -742,13 +907,21 @@ class FluxTrainingGUI(ctk.CTkFrame):
             'network_type': self.network_type_var.get(),
             'linear': self.linear_var.get(),
             'linear_alpha': self.linear_alpha_var.get(),
+            # Sampling settings
+            'enable_sampling': self.enable_sampling_var.get(),
+            'sample_every': self.sample_every_var.get(),
             'sampling_steps': self.sampling_steps_var.get(),
             'cfg_scale': self.cfg_scale_var.get(),
+            'seed': self.seed_var.get(),
+            'use_fixed_seed': self.use_fixed_seed_var.get(),
             'prompt_style': self.prompt_style_var.get(),
             'prompt_text': self.prompt_text.get('1.0', tk.END).strip(),
-            'resolutions': {size: data['var'].get() for size, data in self.resolution_vars.items()},
-            'batch_configs': self.batch_configs,  # Save batch configs
-            'dark_mode': self.is_dark_mode
+            'dark_mode': self.is_dark_mode,
+            # Ensure these critical paths are saved
+            'last_model_path': self.model_path_var.get(),
+            'last_output_folder': self.output_folder_var.get(),
+            # Save resolution settings
+            'resolutions': {res: data['var'].get() for res, data in self.resolution_vars.items()},
         }
         
         try:
@@ -766,16 +939,19 @@ class FluxTrainingGUI(ctk.CTkFrame):
             with open(self.settings_file, 'r') as f:
                 settings = json.load(f)
                 
-            # Load all the settings
+            # Load basic settings
             self.name_var.set(settings.get('name', ''))
             self.trigger_word_var.set(settings.get('trigger_word', ''))
             self.data_folder_var.set(settings.get('data_folder', ''))
-            self.output_folder_var.set(settings.get('output_folder', ''))
-            self.model_path_var.set(settings.get('model_path', ''))
+            
+            # Load critical paths with priority from last saved paths
+            self.model_path_var.set(settings.get('last_model_path', settings.get('model_path', '')))
+            self.output_folder_var.set(settings.get('last_output_folder', settings.get('output_folder', '')))
+            
             self.is_flux_var.set(settings.get('is_flux', True))
             self.quantize_var.set(settings.get('quantize', True))
             self.convert_utf8_var.set(settings.get('convert_utf8', True))
-            self.lr_var.set(settings.get('learning_rate', '1e-4'))
+            self.lr_var.set(settings.get('learning_rate', '1e-4 (Standard)'))
             self.batch_size_var.set(settings.get('batch_size', '1'))
             self.steps_var.set(settings.get('steps', '5000'))
             self.auto_steps_var.set(settings.get('auto_steps', True))
@@ -791,20 +967,20 @@ class FluxTrainingGUI(ctk.CTkFrame):
             self.network_type_var.set(settings.get('network_type', 'lora'))
             self.linear_var.set(settings.get('linear', '16'))
             self.linear_alpha_var.set(settings.get('linear_alpha', '16'))
+            
+            # Load sampling settings
+            self.enable_sampling_var.set(settings.get('enable_sampling', True))
+            self.sample_every_var.set(settings.get('sample_every', '500'))
             self.sampling_steps_var.set(settings.get('sampling_steps', '20'))
             self.cfg_scale_var.set(settings.get('cfg_scale', '3.5'))
+            self.seed_var.set(settings.get('seed', '42'))
+            self.use_fixed_seed_var.set(settings.get('use_fixed_seed', True))
             self.prompt_style_var.set(settings.get('prompt_style', 'Natural'))
             
-            # Load prompt text
+            # Load prompt text if it exists
             if 'prompt_text' in settings:
                 self.prompt_text.delete('1.0', tk.END)
                 self.prompt_text.insert('1.0', settings['prompt_text'])
-            
-            # Load resolutions
-            if 'resolutions' in settings:
-                for size, value in settings['resolutions'].items():
-                    if size in self.resolution_vars:
-                        self.resolution_vars[size]['var'].set(value)
                         
             # Update steps entry state
             if hasattr(self, 'steps_entry'):
@@ -813,15 +989,15 @@ class FluxTrainingGUI(ctk.CTkFrame):
             # Update dataset stats if data folder exists
             self.update_dataset_stats(settings.get('data_folder', ''))
             
-            # Load batch configs
-            self.batch_configs = settings.get('batch_configs', [])
-            for config_path in self.batch_configs:
-                if os.path.exists(config_path):
-                    self.batch_tree.insert('', 'end', values=(os.path.basename(config_path), config_path))
-                
             # Load theme preference
             self.is_dark_mode = settings.get('dark_mode', True)
             
+            # Load resolution settings
+            if 'resolutions' in settings:
+                for res, value in settings['resolutions'].items():
+                    if res in self.resolution_vars:
+                        self.resolution_vars[res]['var'].set(value)
+                
         except Exception as e:
             print(f"Failed to load settings: {str(e)}")
 
@@ -873,89 +1049,126 @@ class FluxTrainingGUI(ctk.CTkFrame):
             image_count, caption_count = self.count_dataset_files(folder_path)
             self.dataset_stats_var.set(f"Images: {image_count}, Captions: {caption_count}")
             if self.auto_steps_var.get():
-                self.update_suggested_steps(image_count)
-
-    def add_to_batch(self):
-        """Add current configuration to batch"""
-        if not self.current_config_path:
-            messagebox.showwarning("Warning", "Please save or load a configuration first.")
-            return
+                suggested_steps = self.calculate_suggested_steps(image_count)
+                self.steps_var.set(str(suggested_steps))
+        else:
+            self.dataset_stats_var.set("No valid folder selected")
             
-        # Check if config is already in batch
-        for item in self.batch_tree.get_children():
-            if self.batch_tree.item(item)['values'][1] == self.current_config_path:
-                messagebox.showinfo("Info", "This configuration is already in the batch.")
-                return
+    def browse_folder(self, folder_type):
+        """Browse for a folder based on type"""
+        folder = filedialog.askdirectory()
+        if folder:
+            if folder_type == 'model':
+                self.model_path_var.set(folder)
+            elif folder_type == 'data':
+                self.data_folder_var.set(folder)
+                # Explicitly update dataset stats when data folder is selected
+                self.update_dataset_stats(folder)
+            elif folder_type == 'output':
+                self.output_folder_var.set(folder)
+
+    def count_dataset_files(self, folder):
+        """Count the number of images and caption files in the dataset folder"""
+        image_extensions = {'.png', '.jpg', '.jpeg', '.webp'}
+        caption_extensions = {'.txt', '.caption'}
         
-        # Add to treeview
-        self.batch_tree.insert('', 'end', values=(os.path.basename(self.current_config_path), 
-                                                 self.current_config_path))
-        self.batch_configs.append(self.current_config_path)
-
-    def add_config_to_batch(self):
-        """Add configuration file to batch"""
-        file_paths = filedialog.askopenfilenames(
-            defaultextension=".yaml",
-            filetypes=[("YAML files", "*.yaml"), ("All files", "*.*")]
-        )
+        image_count = 0
+        caption_count = 0
         
-        for file_path in file_paths:
-            # Check if config is already in batch
-            if any(file_path == self.batch_tree.item(item)['values'][1] 
-                  for item in self.batch_tree.get_children()):
-                continue
-                
-            # Add to treeview
-            self.batch_tree.insert('', 'end', values=(os.path.basename(file_path), file_path))
-            self.batch_configs.append(file_path)
-
-    def remove_from_batch(self):
-        """Remove selected configuration from batch"""
-        selected = self.batch_tree.selection()
-        if not selected:
-            return
-            
-        for item in selected:
-            config_path = self.batch_tree.item(item)['values'][1]
-            self.batch_configs.remove(config_path)
-            self.batch_tree.delete(item)
-
-    def clear_batch(self):
-        """Clear all configurations from batch"""
-        self.batch_tree.delete(*self.batch_tree.get_children())
-        self.batch_configs.clear()
-
-    def start_batch_training(self):
-        """Start batch training process"""
-        if not self.batch_configs:
-            messagebox.showwarning("Warning", "Batch queue is empty. Please add configurations first.")
-            return
-            
         try:
-            # Get the path to run.py in the same directory as the GUI script
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            train_script = os.path.join(script_dir, "run.py")
+            for file in os.listdir(folder):
+                lower_file = file.lower()
+                ext = os.path.splitext(lower_file)[1]
+                if ext in image_extensions:
+                    image_count += 1
+                elif ext in caption_extensions:
+                    caption_count += 1
             
-            def run_batch():
-                for config_path in self.batch_configs:
-                    try:
-                        # Start training process
-                        process = subprocess.Popen([sys.executable, train_script, config_path])
-                        process.wait()  # Wait for the current training to complete
-                    except Exception as e:
-                        print(f"Error running config {config_path}: {str(e)}")
+            return image_count, caption_count
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to count files: {str(e)}")
+            return 0, 0
+
+    def load_config(self, config):
+        """Load configuration values into GUI fields"""
+        try:
+            # Extract the first process config (assuming single process)
+            process_config = config.get('config', {}).get('process', [{}])[0]
+            
+            # Basic settings
+            self.name_var.set(config.get('config', {}).get('name', ''))
+            self.trigger_word_var.set(config.get('config', {}).get('trigger_word', ''))
+            
+            # Model settings
+            model_config = process_config.get('model', {})
+            self.model_path_var.set(model_config.get('name_or_path', ''))
+            self.is_flux_var.set(model_config.get('is_flux', True))
+            self.quantize_var.set(model_config.get('quantize', True))
+            
+            # Network settings
+            network_config = process_config.get('network', {})
+            self.network_type_var.set(network_config.get('type', 'lora'))
+            self.linear_var.set(str(network_config.get('linear', 16)))
+            self.linear_alpha_var.set(str(network_config.get('linear_alpha', 16)))
+            
+            # Dataset settings
+            dataset_config = process_config.get('datasets', [{}])[0]
+            self.data_folder_var.set(dataset_config.get('folder_path', ''))
+            
+            # Training settings
+            train_config = process_config.get('train', {})
+            self.batch_size_var.set(str(train_config.get('batch_size', 1)))
+            self.steps_var.set(str(train_config.get('steps', 5000)))
+            self.grad_accum_var.set(str(train_config.get('gradient_accumulation_steps', 1)))
+            self.train_unet_var.set(train_config.get('train_unet', True))
+            self.train_text_encoder_var.set(train_config.get('train_text_encoder', False))
+            self.grad_checkpointing_var.set(train_config.get('gradient_checkpointing', True))
+            self.noise_scheduler_var.set(train_config.get('noise_scheduler', 'flowmatch'))
+            self.optimizer_var.set(train_config.get('optimizer', 'adamw8bit'))
+            
+            # Learning rate
+            lr_value = str(train_config.get('lr', '1e-4'))
+            # Find matching preset or use custom value
+            preset_found = False
+            for preset_name, preset_data in self.lr_presets.items():
+                if preset_data['value'] == lr_value:
+                    self.lr_var.set(preset_name)
+                    preset_found = True
+                    break
+            if not preset_found:
+                self.lr_var.set(lr_value)
+            
+            # Save settings
+            save_config = process_config.get('save', {})
+            self.save_dtype_var.set(save_config.get('dtype', 'float16'))
+            self.save_every_var.set(str(save_config.get('save_every', 250)))
+            self.max_saves_var.set(str(save_config.get('max_step_saves_to_keep', 4)))
+            
+            # Output folder
+            self.output_folder_var.set(process_config.get('training_folder', ''))
+            
+            # Sampling settings
+            sample_config = process_config.get('sample', {})
+            if sample_config:
+                self.enable_sampling_var.set(True)
+                self.sample_every_var.set(str(sample_config.get('sample_every', 500)))
+                self.sampling_steps_var.set(str(sample_config.get('sample_steps', 20)))
+                self.cfg_scale_var.set(str(sample_config.get('guidance_scale', 3.5)))
+                self.seed_var.set(str(sample_config.get('seed', 42)))
+                self.use_fixed_seed_var.set(sample_config.get('walk_seed', True))
                 
-                messagebox.showinfo("Success", "Batch training completed!")
+                # Load prompts if they exist
+                if 'prompts' in sample_config:
+                    self.prompt_text.delete('1.0', tk.END)
+                    self.prompt_text.insert('1.0', '\n\n'.join(sample_config['prompts']))
+            else:
+                self.enable_sampling_var.set(False)
             
-            # Start batch training in a separate thread
-            batch_thread = threading.Thread(target=run_batch)
-            batch_thread.daemon = True
-            batch_thread.start()
-            
-            messagebox.showinfo("Success", "Batch training started!")
+            # Update dataset stats
+            self.update_dataset_stats(self.data_folder_var.get())
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to start batch training: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load configuration: {str(e)}")
 
     def add_theme_toggle(self):
         """Add theme toggle button to the GUI"""
@@ -1078,7 +1291,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
             self.steps_entry.configure(state='disabled' if self.auto_steps_var.get() else 'normal')
 
     def calculate_suggested_steps(self, image_count):
-        """Calculate suggested training steps based on image count"""
+        """Calculate suggested training steps based on image count and learning rate"""
         if image_count <= 0:
             return 5000  # Default value
         
@@ -1086,21 +1299,30 @@ class FluxTrainingGUI(ctk.CTkFrame):
         selected_lr = self.lr_var.get()
         lr_value = float(self.lr_presets[selected_lr]['value'] if selected_lr in self.lr_presets else selected_lr)
         
-        # Base calculation: roughly 100 steps per image
-        suggested = image_count * 100
+        # Define recommended repeats based on learning rate
+        if lr_value >= 2e-4:  # Fast learning
+            repeats = 100  # Less repeats needed for fast learning
+        elif lr_value >= 1e-4:  # Standard
+            repeats = 150
+        elif lr_value >= 5e-5:  # Conservative
+            repeats = 200
+        elif lr_value >= 3e-5:  # Very Conservative
+            repeats = 250
+        else:  # Minimal
+            repeats = 300
         
-        # Adjust steps based on learning rate
-        # Use 1e-4 as the baseline learning rate
-        lr_multiplier = 1e-4 / lr_value
-        suggested = int(suggested * lr_multiplier)
+        # Calculate total steps based on images and batch size
+        batch_size = int(self.batch_size_var.get())
+        steps_per_epoch = (image_count + batch_size - 1) // batch_size
+        total_steps = steps_per_epoch * repeats
         
-        # Round to nearest 500
-        suggested = round(suggested / 500) * 500
+        # Round to nearest 100
+        total_steps = round(total_steps / 100) * 100
         
         # Set minimum and maximum values
-        suggested = max(1000, min(suggested, 10000))
+        total_steps = max(1000, min(total_steps, 20000))
         
-        return suggested
+        return total_steps
 
     def update_suggested_steps(self, image_count):
         """Update steps based on auto calculation"""
@@ -1202,6 +1424,58 @@ Additional Notes: [any special instructions]"""
         
         return templates.get(template_type, "Template not found")
 
+    def update_steps_on_lr_change(self):
+        """Update steps when learning rate changes and auto steps is enabled"""
+        if self.auto_steps_var.get():
+            folder_path = self.data_folder_var.get()
+            if folder_path and os.path.exists(folder_path):
+                image_count, _ = self.count_dataset_files(folder_path)
+                suggested_steps = self.calculate_suggested_steps(image_count)
+                self.steps_var.set(str(suggested_steps))
+
+    def setup_auto_save_traces(self):
+        """Setup traces on all variables to auto-save settings when they change"""
+        # List of all StringVar variables
+        string_vars = [
+            'name_var', 'trigger_word_var', 'data_folder_var', 'output_folder_var',
+            'lr_var', 'batch_size_var', 'steps_var', 'grad_accum_var',
+            'noise_scheduler_var', 'optimizer_var', 'save_dtype_var',
+            'save_every_var', 'max_saves_var', 'network_type_var',
+            'linear_var', 'linear_alpha_var', 'sample_every_var',
+            'sampling_steps_var', 'cfg_scale_var', 'seed_var',
+            'model_path_var'
+        ]
+        
+        # List of all BooleanVar variables
+        bool_vars = [
+            'is_flux_var', 'quantize_var', 'convert_utf8_var', 'auto_steps_var',
+            'train_unet_var', 'train_text_encoder_var', 'grad_checkpointing_var',
+            'enable_sampling_var', 'use_fixed_seed_var'
+        ]
+        
+        # Add trace to each StringVar
+        for var_name in string_vars:
+            if hasattr(self, var_name):
+                getattr(self, var_name).trace_add("write", self._on_setting_change)
+        
+        # Add trace to each BooleanVar
+        for var_name in bool_vars:
+            if hasattr(self, var_name):
+                getattr(self, var_name).trace_add("write", self._on_setting_change)
+        
+        # Add trace for prompt text changes
+        self.prompt_text.bind('<<Modified>>', self._on_prompt_change)
+
+    def _on_setting_change(self, *args):
+        """Called when any setting changes to save current state"""
+        self.save_last_settings()
+        
+    def _on_prompt_change(self, event):
+        """Called when prompt text changes"""
+        if self.prompt_text.edit_modified():
+            self.save_last_settings()
+            self.prompt_text.edit_modified(False)
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Flux Training GUI")
@@ -1211,9 +1485,37 @@ if __name__ == "__main__":
     root.overrideredirect(True)
     root.configure(bg='#1e1e1e')
     
+    # Make window draggable
+    def start_move(event):
+        root.x = event.x_root
+        root.y = event.y_root
+
+    def stop_move(event):
+        root.x = None
+        root.y = None
+
+    def do_move(event):
+        if hasattr(root, 'x') and hasattr(root, 'y'):
+            deltax = event.x_root - root.x
+            deltay = event.y_root - root.y
+            x = root.winfo_x() + deltax
+            y = root.winfo_y() + deltay
+            root.geometry(f"+{x}+{y}")
+            root.x = event.x_root
+            root.y = event.y_root
+
+    # Bind dragging to title bar area only
+    title_bar = ctk.CTkFrame(root, height=30)
+    title_bar.pack(fill='x', side='top')
+    title_bar.configure(fg_color='#1e1e1e')
+    
+    title_bar.bind("<ButtonPress-1>", start_move)
+    title_bar.bind("<ButtonRelease-1>", stop_move)
+    title_bar.bind("<B1-Motion>", do_move)
+    
     # Add a close button in the top-right corner
     close_button = ctk.CTkButton(
-        root,
+        title_bar,
         text="×",
         width=30,
         height=30,
@@ -1221,32 +1523,11 @@ if __name__ == "__main__":
         fg_color="transparent",
         hover_color="#FF4444"
     )
-    close_button.pack(anchor='ne', padx=5, pady=5)
+    close_button.pack(side='right', padx=5)
     
-    # Create a main container frame with the dark background
-    main_container = ctk.CTkFrame(root)
-    main_container.configure(fg_color='#1e1e1e')
-    main_container.pack(fill='both', expand=True)
-    
-    # Make window draggable
-    def start_move(event):
-        root.x = event.x
-        root.y = event.y
-
-    def stop_move(event):
-        root.x = None
-        root.y = None
-
-    def do_move(event):
-        deltax = event.x - root.x
-        deltay = event.y - root.y
-        x = root.winfo_x() + deltax
-        y = root.winfo_y() + deltay
-        root.geometry(f"+{x}+{y}")
-
-    root.bind("<ButtonPress-1>", start_move)
-    root.bind("<ButtonRelease-1>", stop_move)
-    root.bind("<B1-Motion>", do_move)
+    # Add window title
+    title_label = ctk.CTkLabel(title_bar, text="Flux Training GUI")
+    title_label.pack(side='left', padx=10)
     
     # Center the window but let it size to content
     screen_width = root.winfo_screenwidth()
@@ -1255,7 +1536,7 @@ if __name__ == "__main__":
     y = (screen_height - 512) // 2
     root.geometry(f"+{x}+{y}")
     
-    app = FluxTrainingGUI(main_container)
+    app = FluxTrainingGUI(root)
     
     # Update window size to fit content
     root.update_idletasks()
