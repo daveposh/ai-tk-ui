@@ -40,6 +40,23 @@ class CreateToolTip:
 
 class FluxTrainingGUI(ctk.CTkFrame):
     def __init__(self, master=None, config=None):
+        # Initialize theme first
+        self.themes = Themes()
+        self.is_dark_mode = self.load_theme_preference()
+        
+        # Configure root window background color (using _configure_window for tk.Tk)
+        if isinstance(master, tk.Tk):
+            master.configure(bg=self.themes.get_theme(self.is_dark_mode)['bg'])
+            master.minsize(800, 600)  # Set minimum size for root window
+            # Set window protocol for root window
+            master.protocol("WM_DELETE_WINDOW", self.on_closing)
+        else:
+            master.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['bg'])
+            # Find root window and set protocol
+            root = self._find_root_window(master)
+            if root:
+                root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
         super().__init__(master)
         self.master = master
         self._raw_config = config if config is not None else {}
@@ -47,9 +64,8 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.current_config_label_var = tk.StringVar(value='No config loaded')
         self.batch_configs = []
         
-        # Initialize theme first
-        self.themes = Themes()
-        self.is_dark_mode = self.load_theme_preference()
+        # Configure frame colors
+        self.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['bg'])
         
         # Settings file path
         self.settings_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_settings.json")
@@ -60,9 +76,6 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Add seed variable
         self.seed_var = tk.StringVar(value="-1")
         self.use_fixed_seed_var = tk.BooleanVar(value=False)
-        
-        # Configure window properties
-        self.master.minsize(800, 600)  # Adjusted minimum size
         
         # Create main layout
         self.create_widgets()
@@ -77,15 +90,19 @@ class FluxTrainingGUI(ctk.CTkFrame):
         if config:
             self.load_config(config)
         
-        # Save settings when window is closed
-        self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
         # Add trace to data_folder_var
         self.data_folder_var.trace_add("write", lambda *args: self.update_dataset_stats(self.data_folder_var.get()))
         
         # Now apply theme after all widgets are created
         self.themes.apply_theme(self.master, self.is_dark_mode)
         self.add_theme_toggle()
+
+    def _find_root_window(self, widget):
+        """Find the root window by traversing up the widget hierarchy"""
+        parent = widget.master
+        while parent and not isinstance(parent, tk.Tk):
+            parent = parent.master
+        return parent
 
     def initialize_variables(self):
         """Initialize all variables used in the GUI"""
@@ -191,9 +208,11 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Create main notebook
         self.main_notebook = ctk.CTkTabview(self)
         self.main_notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        self.main_notebook.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
         
         # Training tab
         training_tab = self.main_notebook.add("Training")
+        training_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
         
         # Left column in Training tab
         left_column = ctk.CTkFrame(training_tab)
@@ -242,9 +261,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
             'button_hover_color': self.themes.get_theme(self.is_dark_mode)['highlight'],
             'dropdown_fg_color': self.themes.get_theme(self.is_dark_mode)['frame'],
             'dropdown_hover_color': self.themes.get_theme(self.is_dark_mode)['highlight'],
-            'text_color': self.themes.get_theme(self.is_dark_mode)['text'],
-            'border_width': 0,
-            'corner_radius': 6
+            'text_color': self.themes.get_theme(self.is_dark_mode)['text']
         }
         
         ctk.CTkButton(model_path_frame, text="Browse", command=lambda: self.browse_folder('model'), **button_style).pack(side='right')
@@ -340,6 +357,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Progress Frame
         progress_frame = ctk.CTkFrame(self)
         progress_frame.pack(fill='x', padx=10, pady=5)
+        progress_frame.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
         
         self.progress_bar = ctk.CTkProgressBar(progress_frame)
         self.progress_bar.pack(fill='x', padx=5, pady=5)
@@ -351,6 +369,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
         
         # Sample tab
         sample_tab = self.main_notebook.add("Sample")
+        sample_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
         
         # Left column for prompt settings
         sample_left = ctk.CTkFrame(sample_tab)
@@ -444,7 +463,23 @@ class FluxTrainingGUI(ctk.CTkFrame):
         prompt_frame = ctk.CTkFrame(sample_right)
         prompt_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
-        ctk.CTkLabel(prompt_frame, text="Prompt:").pack(anchor='w', padx=5, pady=2)
+        # Prompt header frame with label and delete button
+        prompt_header = ctk.CTkFrame(prompt_frame)
+        prompt_header.pack(fill='x', padx=5, pady=2)
+        
+        ctk.CTkLabel(prompt_header, text="Prompt:").pack(side='left', padx=5)
+        
+        # Delete prompt button
+        ctk.CTkButton(
+            prompt_header,
+            text="Delete Prompt",
+            command=lambda: self.prompt_text.delete('1.0', tk.END),
+            fg_color=self.themes.get_theme(self.is_dark_mode)['button'],
+            hover_color=self.themes.get_theme(self.is_dark_mode)['highlight'],
+            border_width=0,
+            corner_radius=6,
+            width=100
+        ).pack(side='right', padx=5)
         
         self.prompt_text = tk.Text(prompt_frame, height=10, wrap=tk.WORD)
         self.prompt_text.pack(fill='both', expand=True, padx=5, pady=5)
@@ -793,7 +828,10 @@ class FluxTrainingGUI(ctk.CTkFrame):
     def on_closing(self):
         """Handle window closing"""
         self.save_last_settings()
-        self.master.destroy()
+        # Find root window and destroy it
+        root = self._find_root_window(self.master)
+        if root:
+            root.destroy()
 
     def load_config_file(self):
         """Load configuration from a YAML file"""
@@ -933,20 +971,73 @@ class FluxTrainingGUI(ctk.CTkFrame):
     def toggle_theme(self):
         """Toggle between light and dark themes"""
         self.is_dark_mode = not self.is_dark_mode
+        
+        # Get new theme colors
+        theme = self.themes.get_theme(self.is_dark_mode)
+        
+        # Update root window background color
+        if isinstance(self.master, tk.Tk):
+            self.master.configure(bg=theme['bg'])
+        else:
+            self.master.configure(fg_color=theme['bg'])
+        
+        # Update main frame color
+        self.configure(fg_color=theme['bg'])
+        
+        # Update notebook colors
+        self.main_notebook.configure(fg_color=theme['frame'])
+        for tab_name in ["Training", "Sample"]:
+            tab = getattr(self.main_notebook._segmented_button, tab_name)
+            if tab:
+                tab.configure(fg_color=theme['frame'])
+        
+        # Update progress frame color
+        for widget in self.winfo_children():
+            if isinstance(widget, ctk.CTkFrame):
+                widget.configure(fg_color=theme['frame'])
+        
+        # Apply theme to all widgets
         self.themes.apply_theme(self.master, self.is_dark_mode)
         
-        # Update frame colors
-        frame_color = self.themes.get_theme(self.is_dark_mode)['frame']
-        for widget in self.scrollable_frame.winfo_children():
-            if isinstance(widget, ctk.CTkFrame):
-                widget.configure(fg_color=frame_color)
-                # Update nested frames
-                for child in widget.winfo_children():
-                    if isinstance(child, ctk.CTkFrame):
-                        child.configure(fg_color=frame_color)
-        
+        # Update theme button text
         self.theme_button.configure(text="🌙" if self.is_dark_mode else "☀️")
+        
+        # Save theme preference
         self.save_theme_preference()
+        
+        # Update button styles
+        button_style = {
+            'fg_color': theme['button'],
+            'hover_color': theme['highlight'],
+            'text_color': theme['text']
+        }
+        
+        option_menu_style = {
+            'fg_color': theme['button'],
+            'button_color': theme['button'],
+            'button_hover_color': theme['highlight'],
+            'dropdown_fg_color': theme['frame'],
+            'dropdown_hover_color': theme['highlight'],
+            'text_color': theme['text']
+        }
+        
+        # Update all buttons and option menus recursively
+        def update_widget_styles(widget):
+            if isinstance(widget, ctk.CTkButton):
+                widget.configure(**button_style)
+            elif isinstance(widget, ctk.CTkOptionMenu):
+                widget.configure(**option_menu_style)
+            elif isinstance(widget, ctk.CTkFrame):
+                widget.configure(fg_color=theme['frame'])
+            elif isinstance(widget, tk.Tk):
+                widget.configure(bg=theme['bg'])
+            
+            # Recursively update child widgets
+            for child in widget.winfo_children():
+                update_widget_styles(child)
+        
+        # Apply styles to all widgets
+        update_widget_styles(self)
 
     def load_theme_preference(self):
         """Load theme preference from settings file"""
@@ -1115,8 +1206,10 @@ if __name__ == "__main__":
     root = tk.Tk()
     root.title("Flux Training GUI")
     
-    # Make window borderless
+    # Configure root window
+    root.minsize(800, 600)
     root.overrideredirect(True)
+    root.configure(bg='#1e1e1e')
     
     # Add a close button in the top-right corner
     close_button = ctk.CTkButton(
@@ -1129,6 +1222,11 @@ if __name__ == "__main__":
         hover_color="#FF4444"
     )
     close_button.pack(anchor='ne', padx=5, pady=5)
+    
+    # Create a main container frame with the dark background
+    main_container = ctk.CTkFrame(root)
+    main_container.configure(fg_color='#1e1e1e')
+    main_container.pack(fill='both', expand=True)
     
     # Make window draggable
     def start_move(event):
@@ -1157,7 +1255,7 @@ if __name__ == "__main__":
     y = (screen_height - 512) // 2
     root.geometry(f"+{x}+{y}")
     
-    app = FluxTrainingGUI(root)
+    app = FluxTrainingGUI(main_container)
     
     # Update window size to fit content
     root.update_idletasks()
