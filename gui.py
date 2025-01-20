@@ -8,6 +8,8 @@ import subprocess
 import sys
 import json
 import tempfile
+from themes import Themes
+import customtkinter as ctk
 
 class CreateToolTip:
     """Create a tooltip for a given widget"""
@@ -36,22 +38,57 @@ class CreateToolTip:
             self.tooltip.destroy()
             self.tooltip = None
 
-class FluxTrainingGUI(ttk.Frame):
+class FluxTrainingGUI(ctk.CTkFrame):
     def __init__(self, master=None, config=None):
-        ttk.Frame.__init__(self, master)
+        super().__init__(master)
         self.master = master
         self._raw_config = config if config is not None else {}
         self.current_config_path = None
         self.current_config_label_var = tk.StringVar(value='No config loaded')
-        self.batch_configs = []  # List to store batch training configs
+        self.batch_configs = []
         
-        # Configure window size and properties
-        self.master.geometry("768x512")
-        self.master.minsize(768, 512)
+        # Initialize theme first
+        self.themes = Themes()
+        self.is_dark_mode = self.load_theme_preference()
         
         # Settings file path
         self.settings_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_settings.json")
         
+        # Initialize variables
+        self.initialize_variables()
+        
+        # Add seed variable
+        self.seed_var = tk.StringVar(value="-1")
+        self.use_fixed_seed_var = tk.BooleanVar(value=False)
+        
+        # Configure window properties
+        self.master.minsize(800, 600)  # Adjusted minimum size
+        
+        # Create main layout
+        self.create_widgets()
+        
+        # Pack main frame
+        self.pack(fill="both", expand=True)
+        self.grid_columnconfigure(0, weight=1)
+        
+        # Load settings after widgets are created
+        self.load_last_settings()
+        
+        if config:
+            self.load_config(config)
+        
+        # Save settings when window is closed
+        self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # Add trace to data_folder_var
+        self.data_folder_var.trace_add("write", lambda *args: self.update_dataset_stats(self.data_folder_var.get()))
+        
+        # Now apply theme after all widgets are created
+        self.themes.apply_theme(self.master, self.is_dark_mode)
+        self.add_theme_toggle()
+
+    def initialize_variables(self):
+        """Initialize all variables used in the GUI"""
         # Initialize learning rate presets
         self.lr_presets = {
             '1e-4 (Standard)': {'value': '1e-4', 'description': 'Standard learning rate for most cases'},
@@ -65,7 +102,7 @@ class FluxTrainingGUI(ttk.Frame):
         self.step_buttons = []
         self.resolution_vars = {}
         
-        # Initialize variables with defaults
+        # Initialize all variables with defaults
         self.name_var = tk.StringVar(value='')
         self.trigger_word_var = tk.StringVar(value='')
         self.data_folder_var = tk.StringVar(value='')
@@ -102,147 +139,6 @@ class FluxTrainingGUI(ttk.Frame):
         self.grad_checkpointing_var = tk.BooleanVar(value=True)
         self.noise_scheduler_var = tk.StringVar(value="flowmatch")
         self.optimizer_var = tk.StringVar(value="adamw8bit")
-        
-        # Create scrollable frame
-        self.canvas = tk.Canvas(self)
-        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        self.scrollable_frame = ttk.Frame(self.canvas)
-
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
-
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-
-        # Pack scrollbar and canvas
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.scrollbar.pack(side="right", fill="y")
-        
-        # Pack the main frame
-        self.pack(fill="both", expand=True)
-        
-        # Bind mouse wheel to canvas
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-        self.canvas.bind_all("<Button-4>", self._on_mousewheel)
-        self.canvas.bind_all("<Button-5>", self._on_mousewheel)
-        
-        # Create widgets
-        self.create_widgets()
-        
-        # Load last settings if available
-        self.load_last_settings()
-        
-        # Then load config if provided (overrides last settings)
-        if config:
-            self.load_config(config)
-            
-        # Save settings when window is closed
-        self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
-        # Add trace to data_folder_var to update stats when changed
-        self.data_folder_var.trace_add("write", lambda *args: self.update_dataset_stats(self.data_folder_var.get()))
-
-    def load_config(self, config):
-        """Load configuration values into GUI elements"""
-        try:
-            if 'config' in config:
-                # Basic settings
-                self.name_var.set(config['config'].get('name', ''))
-                self.trigger_word_var.set(config['config'].get('trigger_word', ''))
-                
-                # Process settings
-                if 'process' in config['config'] and config['config']['process']:
-                    process = config['config']['process'][0]
-                    
-                    # Model settings
-                    if 'model' in process:
-                        model = process['model']
-                        self.model_path_var.set(model.get('name_or_path', ''))
-                        self.is_flux_var.set(model.get('is_flux', True))
-                        self.quantize_var.set(model.get('quantize', True))
-                    
-                    # Training settings
-                    if 'train' in process:
-                        train = process['train']
-                        self.steps_var.set(str(train.get('steps', 5000)))
-                        self.batch_size_var.set(str(train.get('batch_size', 1)))
-                        self.grad_accum_var.set(str(train.get('gradient_accumulation_steps', 1)))
-                        self.train_unet_var.set(train.get('train_unet', True))
-                        self.train_text_encoder_var.set(train.get('train_text_encoder', False))
-                        self.grad_checkpointing_var.set(train.get('gradient_checkpointing', True))
-                        self.noise_scheduler_var.set(train.get('noise_scheduler', 'flowmatch'))
-                        self.optimizer_var.set(train.get('optimizer', 'adamw8bit'))
-                        
-                        # Learning rate
-                        lr = train.get('lr', '1e-4')
-                        for preset_name, preset_data in self.lr_presets.items():
-                            if preset_data['value'] == str(lr):
-                                self.lr_var.set(preset_name)
-                                break
-                        else:
-                            self.lr_var.set(str(lr))
-                    
-                    # Network settings
-                    if 'network' in process:
-                        network = process['network']
-                        self.network_type_var.set(network.get('type', 'lora'))
-                        self.linear_var.set(str(network.get('linear', 16)))
-                        self.linear_alpha_var.set(str(network.get('linear_alpha', 16)))
-                    
-                    # Save settings
-                    if 'save' in process:
-                        save = process['save']
-                        self.save_dtype_var.set(save.get('dtype', 'float16'))
-                        self.save_every_var.set(str(save.get('save_every', 250)))
-                        self.max_saves_var.set(str(save.get('max_step_saves_to_keep', 4)))
-                    
-                    # Dataset settings
-                    if 'datasets' in process and process['datasets']:
-                        dataset = process['datasets'][0]
-                        folder_path = dataset.get('folder_path', '')
-                        self.data_folder_var.set(folder_path)
-                        
-                        # Update dataset stats
-                        self.update_dataset_stats(folder_path)
-                        
-                        # Resolution settings
-                        resolutions = dataset.get('resolution', [])
-                        for res in self.resolution_vars:
-                            size = int(res.split('x')[0])
-                            self.resolution_vars[res]['var'].set(size in resolutions)
-                    
-                    # Training folder
-                    self.output_folder_var.set(process.get('training_folder', ''))
-                    
-                    # Sample settings
-                    if 'sample' in process:
-                        sample = process['sample']
-                        self.enable_sampling_var.set(sample is not None)
-                        if sample:
-                            self.sample_every_var.set(str(sample.get('sample_every', 500)))
-                            self.sampling_steps_var.set(str(sample.get('sample_steps', 20)))
-                            self.cfg_scale_var.set(str(sample.get('guidance_scale', 3.5)))
-                            if 'prompts' in sample and sample['prompts']:
-                                self.prompt_text.delete('1.0', tk.END)
-                                self.prompt_text.insert('1.0', '\n\n'.join(sample['prompts']))
-                    
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load configuration: {str(e)}")
-
-    def get_config_value(self, *keys, default=None):
-        """Safely get nested config value without recursion"""
-        try:
-            value = self._raw_config
-            for key in keys:
-                if isinstance(value, (dict, list)):
-                    value = value[key] if isinstance(value, dict) else value[int(key)]
-                else:
-                    return default
-            return value
-        except (KeyError, IndexError, ValueError, TypeError):
-            return default
 
     def _on_mousewheel(self, event):
         """Handle mousewheel scrolling"""
@@ -251,462 +147,355 @@ class FluxTrainingGUI(ttk.Frame):
         elif event.num == 4 or event.delta > 0:  # Scroll up
             self.canvas.yview_scroll(-1, "units")
 
-    def calculate_suggested_steps(self, image_count):
-        """Calculate suggested training steps based on image count and learning rate"""
-        if image_count <= 0:
-            return 5000  # Default value
+    def setup_scrollable_frame(self):
+        """Set up the scrollable frame"""
+        self.canvas = tk.Canvas(self)
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
         
-        # Get current learning rate value
-        selected_lr = self.lr_var.get()
-        lr_value = float(self.lr_presets[selected_lr]['value'] if selected_lr in self.lr_presets else selected_lr)
+        # Configure grid weights for main frame
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
         
-        # Base calculation: roughly 100 steps per image
-        suggested = image_count * 100
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
         
-        # Adjust steps based on learning rate
-        # Use 1e-4 as the baseline learning rate
-        lr_multiplier = 1e-4 / lr_value
-        suggested = int(suggested * lr_multiplier)
+        # Create window in canvas and make it expand
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw", width=self.canvas.winfo_width())
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
         
-        # Round to nearest 500
-        suggested = round(suggested / 500) * 500
+        # Configure canvas to expand
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
         
-        # Set minimum and maximum values
-        suggested = max(1000, min(suggested, 10000))
+        # Pack main frame
+        self.pack(fill="both", expand=True)
         
-        return suggested
+        # Bind canvas resize
+        self.canvas.bind('<Configure>', self._on_canvas_configure)
+        
+        # Bind mouse wheel
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel)
 
-    def update_suggested_steps(self, image_count):
-        """Update steps based on auto calculation"""
-        if self.auto_steps_var.get():
-            suggested = self.calculate_suggested_steps(image_count)
-            self.steps_var.set(str(suggested))
-
-    def browse_folder(self, folder_type):
-        folder = filedialog.askdirectory()
-        if folder:
-            if folder_type == 'data':
-                self.data_folder_var.set(folder)
-                # Update dataset stats
-                self.update_dataset_stats(folder)
-            elif folder_type == 'output':
-                self.output_folder_var.set(folder)
-            elif folder_type == 'model':
-                self.model_path_var.set(folder)
-
-    def toggle_steps_entry(self):
-        """Toggle the steps entry between auto and manual"""
-        if self.auto_steps_var.get():
-            # If switching to auto, update with suggested steps
-            if self.data_folder_var.get():
-                image_count, _ = self.count_dataset_files(self.data_folder_var.get())
-                self.update_suggested_steps(image_count)
-        self.steps_entry.configure(state='disabled' if self.auto_steps_var.get() else 'normal')
+    def _on_canvas_configure(self, event):
+        """Handle canvas resize"""
+        # Update the width of the window in the canvas
+        self.canvas.itemconfig(self.canvas.find_withtag('all')[0], width=event.width)
 
     def create_widgets(self):
-        # Initialize default prompts first
-        self.default_natural_prompt = """[trigger], a stunning female model in an opulent mansion living room, wearing an elegant evening gown, perfect lighting, intricate architectural details, crystal chandelier, ornate gold-framed mirrors, marble fireplace, luxurious velvet furniture, hardwood floors, detailed wall moldings, floor-to-ceiling windows with silk curtains, best quality, masterpiece, highly detailed, photorealistic, ultra-realistic, professional photography, ambient lighting, cinematic composition
-
-[trigger], beautiful woman in designer dress, luxury penthouse suite, panoramic city views, modern designer furniture, ambient evening lighting, professional fashion photography, perfect makeup, styled hair, best quality, photorealistic
-
-[trigger], elegant female model, haute couture gown, grand ballroom setting, crystal chandeliers, marble columns, ornate architecture, professional lighting, fashion magazine quality, ultra-realistic, highly detailed"""
-
-        self.default_danbooru_prompt = """[trigger], 1girl, solo, masterpiece, best quality, photorealistic, ultra-detailed, elegant, evening_gown, mansion, luxury, chandelier, ornate, marble_floor, gold_trim, velvet_furniture, floor_to_ceiling_windows, perfect_lighting, professional_photography
-
-[trigger], 1girl, solo, beautiful, designer_dress, penthouse, city_view, modern_interior, evening_lighting, fashion_photography, perfect_makeup, styled_hair, high_quality, realistic
-
-[trigger], 1girl, solo, glamour, haute_couture, ballroom, crystal_lighting, marble_columns, architectural, magazine_quality, ultra-realistic, highly_detailed"""
-
-        self.default_t5_prompt = """Generate a photorealistic image of [trigger] as an elegant woman in a luxurious mansion living room. Include details of crystal chandeliers, marble floors, and ornate furniture. Style: professional photography, high quality.
-
-Create a fashion photograph of [trigger] in a modern penthouse with city views. Show her in designer clothing with perfect makeup and lighting. Style: editorial photography.
-
-Produce an ultra-realistic image of [trigger] in a grand ballroom setting with architectural details and luxury elements. Style: high-end fashion photography."""
-
-        # Configure grid layout for scrollable frame
-        self.scrollable_frame.grid_columnconfigure(0, weight=1)
-        self.scrollable_frame.grid_columnconfigure(1, weight=1)
-        current_row = 0
-
+        """Create all widgets for the GUI"""
         # Create main notebook
-        main_notebook = ttk.Notebook(self.scrollable_frame)
-        main_notebook.grid(row=current_row, column=0, columnspan=2, sticky='nsew', padx=5, pady=5)
+        self.main_notebook = ctk.CTkTabview(self)
+        self.main_notebook.pack(fill="both", expand=True, padx=10, pady=10)
         
         # Training tab
-        training_tab = ttk.Frame(main_notebook)
-        main_notebook.add(training_tab, text="Training")
-        training_tab.grid_columnconfigure(0, weight=1)
-        training_tab.grid_columnconfigure(1, weight=1)
-        tab_row = 0
-
-        # 1. Basic Configuration Section
-        basic_frame = ttk.LabelFrame(training_tab, text="Basic Configuration")
-        basic_frame.grid(row=tab_row, column=0, columnspan=2, sticky='nsew', padx=5, pady=5)
-        basic_frame.grid_columnconfigure(1, weight=1)
+        training_tab = self.main_notebook.add("Training")
         
-        # Name Entry
-        ttk.Label(basic_frame, text="Name:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(basic_frame, textvariable=self.name_var).grid(row=0, column=1, columnspan=2, sticky='ew', padx=5, pady=2)
+        # Left column in Training tab
+        left_column = ctk.CTkFrame(training_tab)
+        left_column.pack(side='left', fill='both', expand=True, padx=5, pady=5)
         
-        # Trigger Word Entry
-        ttk.Label(basic_frame, text="Trigger Word:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(basic_frame, textvariable=self.trigger_word_var).grid(row=1, column=1, columnspan=2, sticky='ew', padx=5, pady=2)
+        # Right column in Training tab
+        right_column = ctk.CTkFrame(training_tab)
+        right_column.pack(side='left', fill='both', expand=True, padx=5, pady=5)
         
-        # UTF-8 Conversion Checkbox
-        utf8_checkbox = ttk.Checkbutton(basic_frame, text="Convert Captions to UTF-8", 
-                                      variable=self.convert_utf8_var)
-        utf8_checkbox.grid(row=2, column=0, columnspan=3, sticky='w', padx=5, pady=2)
-        CreateToolTip(utf8_checkbox, "Convert dataset captions to UTF-8 encoding to avoid training errors")
-        tab_row += 1
-
-        # 2. Model Configuration
-        model_frame = ttk.LabelFrame(training_tab, text="Model Configuration")
-        model_frame.grid(row=tab_row, column=0, columnspan=2, sticky='nsew', padx=5, pady=5)
-        model_frame.grid_columnconfigure(1, weight=1)
+        # Basic Configuration (Left Column)
+        basic_frame = ctk.CTkFrame(left_column)
+        basic_frame.pack(fill='x', padx=5, pady=5)
         
-        # Model Path
-        model_path_frame = ttk.Frame(model_frame)
-        model_path_frame.grid(row=0, column=0, columnspan=2, sticky='ew', padx=5, pady=2)
-        ttk.Label(model_path_frame, text="Model Path:").pack(side=tk.LEFT)
-        ttk.Entry(model_path_frame, textvariable=self.model_path_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(model_path_frame, text="Browse", command=lambda: self.browse_folder('model')).pack(side=tk.LEFT, padx=5)
+        # Name and Trigger Word
+        name_frame = ctk.CTkFrame(basic_frame)
+        name_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(name_frame, text="Name:").pack(side='left')
+        ctk.CTkEntry(name_frame, textvariable=self.name_var).pack(side='left', fill='x', expand=True, padx=5)
         
-        # Model Options
-        model_options_frame = ttk.Frame(model_frame)
-        model_options_frame.grid(row=1, column=0, columnspan=2, sticky='ew', padx=5, pady=2)
-        ttk.Checkbutton(model_options_frame, text="Is Flux", variable=self.is_flux_var).pack(side=tk.LEFT, padx=5)
-        ttk.Checkbutton(model_options_frame, text="Quantize", variable=self.quantize_var).pack(side=tk.LEFT, padx=5)
-        tab_row += 1
-
-        # 3. Folders Configuration
-        folders_frame = ttk.LabelFrame(training_tab, text="Folders")
-        folders_frame.grid(row=tab_row, column=0, columnspan=2, sticky='nsew', padx=5, pady=5)
-        folders_frame.grid_columnconfigure(1, weight=1)
+        trigger_frame = ctk.CTkFrame(basic_frame)
+        trigger_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(trigger_frame, text="Trigger Word:").pack(side='left')
+        ctk.CTkEntry(trigger_frame, textvariable=self.trigger_word_var).pack(side='left', fill='x', expand=True, padx=5)
         
-        # Output Folder
-        ttk.Label(folders_frame, text="Output Folder:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(folders_frame, textvariable=self.output_folder_var).grid(row=0, column=1, sticky='ew', padx=5, pady=2)
-        ttk.Button(folders_frame, text="Browse", command=lambda: self.browse_folder("output")).grid(row=0, column=2, padx=5, pady=2)
+        # Model Configuration
+        model_frame = ctk.CTkFrame(left_column)
+        model_frame.pack(fill='x', padx=5, pady=5)
         
-        # Dataset Folder
-        ttk.Label(folders_frame, text="Dataset Folder:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(folders_frame, textvariable=self.data_folder_var).grid(row=1, column=1, sticky='ew', padx=5, pady=2)
-        ttk.Button(folders_frame, text="Browse", command=lambda: self.browse_folder('data')).grid(row=1, column=2, padx=5, pady=2)
+        model_path_frame = ctk.CTkFrame(model_frame)
+        model_path_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(model_path_frame, text="Model Path:").pack(side='left')
+        ctk.CTkEntry(model_path_frame, textvariable=self.model_path_var).pack(side='left', fill='x', expand=True, padx=5)
         
-        # Dataset Stats Label
-        ttk.Label(folders_frame, textvariable=self.dataset_stats_var).grid(row=2, column=0, columnspan=3, sticky='w', padx=5, pady=2)
-        
-        tab_row += 1
-
-        # 4. Network Configuration (Left Column)
-        network_frame = ttk.LabelFrame(training_tab, text="Network Configuration")
-        network_frame.grid(row=tab_row, column=0, sticky='nsew', padx=5, pady=5)
-        network_frame.grid_columnconfigure(1, weight=1)
-        
-        ttk.Label(network_frame, text="Linear:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(network_frame, textvariable=self.linear_var, width=8).grid(row=0, column=1, sticky='w', padx=5, pady=2)
-        ttk.Label(network_frame, text="Alpha:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(network_frame, textvariable=self.linear_alpha_var, width=8).grid(row=1, column=1, sticky='w', padx=5, pady=2)
-
-        # 5. Save Configuration (Right Column)
-        save_frame = ttk.LabelFrame(training_tab, text="Save Configuration")
-        save_frame.grid(row=tab_row, column=1, sticky='nsew', padx=5, pady=5)
-        save_frame.grid_columnconfigure(1, weight=1)
-        
-        ttk.Label(save_frame, text="Save Precision:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
-        ttk.OptionMenu(save_frame, self.save_dtype_var, "float16", "float16", "float32").grid(row=0, column=1, sticky='w', padx=5, pady=2)
-        ttk.Label(save_frame, text="Save Every:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(save_frame, textvariable=self.save_every_var, width=8).grid(row=1, column=1, sticky='w', padx=5, pady=2)
-        ttk.Label(save_frame, text="Max Saves:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(save_frame, textvariable=self.max_saves_var, width=8).grid(row=2, column=1, sticky='w', padx=5, pady=2)
-        tab_row += 1
-
-        # 6. Training Configuration (Left Column)
-        train_frame = ttk.LabelFrame(training_tab, text="Training Configuration")
-        train_frame.grid(row=tab_row, column=0, sticky='nsew', padx=5, pady=5)
-        train_frame.grid_columnconfigure(1, weight=1)
-        
-        # Batch Size
-        ttk.Label(train_frame, text="Batch Size:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(train_frame, textvariable=self.batch_size_var, width=10).grid(row=0, column=1, sticky='w', padx=5, pady=2)
-        
-        # Steps with Auto-Calculate Option
-        ttk.Label(train_frame, text="Steps:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        steps_frame = ttk.Frame(train_frame)
-        steps_frame.grid(row=1, column=1, sticky='w', padx=5, pady=2)
-        
-        self.steps_entry = ttk.Entry(steps_frame, textvariable=self.steps_var, width=10, state='disabled')
-        self.steps_entry.pack(side=tk.LEFT, padx=(0, 5))
-        
-        auto_steps_cb = ttk.Checkbutton(steps_frame, text="Auto", variable=self.auto_steps_var, 
-                                      command=self.toggle_steps_entry)
-        auto_steps_cb.pack(side=tk.LEFT)
-        CreateToolTip(auto_steps_cb, "Automatically calculate steps based on dataset size (100 steps per image)")
-        
-        # Gradient Accumulation
-        ttk.Label(train_frame, text="Gradient Accumulation:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(train_frame, textvariable=self.grad_accum_var, width=10).grid(row=2, column=1, sticky='w', padx=5, pady=2)
-        
-        # Learning Rate Dropdown
-        ttk.Label(train_frame, text="Learning Rate:").grid(row=3, column=0, sticky='w', padx=5, pady=2)
-        lr_menu = ttk.OptionMenu(train_frame, self.lr_var, list(self.lr_presets.keys())[0], *self.lr_presets.keys(),
-                               command=lambda _: self.update_suggested_steps(self.count_dataset_files(self.data_folder_var.get())[0]))
-        lr_menu.grid(row=3, column=1, sticky='w', padx=5, pady=2)
-        
-        # Create tooltip for learning rate
-        def update_lr_tooltip(event=None):
-            selected = self.lr_var.get()
-            if selected in self.lr_presets:
-                CreateToolTip(lr_menu, self.lr_presets[selected]['description'])
-        
-        lr_menu.bind('<Enter>', update_lr_tooltip)
-        
-        # Training Checkboxes
-        ttk.Checkbutton(train_frame, text="Train U-Net", variable=self.train_unet_var).grid(row=4, column=0, sticky='w', padx=5)
-        ttk.Checkbutton(train_frame, text="Train Text Encoder", variable=self.train_text_encoder_var).grid(row=5, column=0, sticky='w', padx=5)
-        ttk.Checkbutton(train_frame, text="Gradient Checkpointing", variable=self.grad_checkpointing_var).grid(row=6, column=0, sticky='w', padx=5)
-        
-        ttk.Label(train_frame, text="Noise Scheduler:").grid(row=7, column=0, sticky='w', padx=5, pady=2)
-        ttk.OptionMenu(train_frame, self.noise_scheduler_var, "flowmatch", "flowmatch").grid(row=7, column=1, sticky='w', padx=5, pady=2)
-        ttk.Label(train_frame, text="Optimizer:").grid(row=8, column=0, sticky='w', padx=5, pady=2)
-        ttk.OptionMenu(train_frame, self.optimizer_var, "adamw8bit", "adamw8bit").grid(row=8, column=1, sticky='w', padx=5, pady=2)
-
-        # 7. Resolution Settings (Right Column)
-        res_frame = ttk.LabelFrame(training_tab, text="Resolution Settings")
-        res_frame.grid(row=tab_row, column=1, sticky='nsew', padx=5, pady=5)
-        res_frame.grid_columnconfigure(0, weight=1)
-        
-        for i, size in enumerate([512, 768, 1024, 1280, 1536]):
-            var = tk.BooleanVar(value=False)
-            self.resolution_vars[f"{size}x{size}"] = {'var': var, 'size': size}
-            ttk.Checkbutton(res_frame, text=f"{size}x{size}",
-                          variable=var).grid(row=i//2, column=i%2, padx=5, pady=2, sticky='w')
-        tab_row += 1
-
-        # Sample tab
-        sample_tab = ttk.Frame(main_notebook)
-        main_notebook.add(sample_tab, text="Sample")
-        sample_tab.grid_columnconfigure(0, weight=1)
-        
-        # Style selection
-        style_frame = ttk.Frame(sample_tab)
-        style_frame.grid(row=0, column=0, sticky='ew', padx=5, pady=2)
-        ttk.Label(style_frame, text="Prompt Style:").pack(side=tk.LEFT)
-        for style in ["Natural", "Danbooru", "T5"]:
-            ttk.Radiobutton(style_frame, text=style, variable=self.prompt_style_var, 
-                          value=style, command=self.update_prompt_style).pack(side=tk.LEFT, padx=5)
-
-        # Sample notebook for prompts and settings
-        sample_notebook = ttk.Notebook(sample_tab)
-        sample_notebook.grid(row=1, column=0, sticky='nsew', padx=5, pady=2)
-        
-        # Prompts tab
-        prompts_tab = ttk.Frame(sample_notebook)
-        sample_notebook.add(prompts_tab, text="Prompts")
-        prompts_tab.grid_columnconfigure(0, weight=1)
-        
-        # Template notebook
-        template_notebook = ttk.Notebook(prompts_tab)
-        template_notebook.grid(row=0, column=0, sticky='nsew', padx=5, pady=2)
-        
-        # Create template categories and buttons
-        categories = {
-            'Women': [
-                ('Elegant', '[trigger], elegant woman in designer evening gown, luxury mansion setting, professional lighting'),
-                ('Business', '[trigger], confident businesswoman in tailored suit, modern office setting, professional lighting'),
-                ('Casual', '[trigger], natural beauty in casual attire, outdoor setting, natural lighting'),
-                ('Glamour', '[trigger], glamorous woman, perfect makeup, styled hair, luxury setting'),
-                ('Fashion', '[trigger], high fashion model, designer clothing, studio lighting, magazine quality'),
-                ('Portrait', '[trigger], sophisticated portrait, perfect lighting, professional photography')
-            ],
-            'Men': [
-                ('Executive', '[trigger], distinguished businessman in tailored suit, luxury office setting'),
-                ('Casual', '[trigger], handsome man in casual wear, natural setting'),
-                ('Fashion', '[trigger], male model in designer clothing, studio lighting'),
-                ('Sport', '[trigger], athletic man in fitness attire, gym setting'),
-                ('Portrait', '[trigger], professional male portrait, business attire, studio lighting'),
-                ('Outdoor', '[trigger], adventurous man, outdoor lifestyle, natural lighting')
-            ],
-            'Places': [
-                ('Mansion', '[trigger], opulent mansion interior, crystal chandeliers, marble floors'),
-                ('Modern', '[trigger], contemporary luxury apartment, city skyline view'),
-                ('Nature', '[trigger], breathtaking landscape, majestic mountains, sunset'),
-                ('Urban', '[trigger], vibrant cityscape, modern architecture, city lights'),
-                ('Studio', '[trigger], professional photography studio, perfect lighting setup'),
-                ('Office', '[trigger], luxury corporate office, modern design, city view')
-            ],
-            'Things': [
-                ('Car', '[trigger], luxury sports car, studio lighting, showroom setting'),
-                ('Fashion', '[trigger], luxury designer product, professional photography'),
-                ('Tech', '[trigger], modern technology device, minimalist setting'),
-                ('Art', '[trigger], fine art object, gallery setting, perfect lighting'),
-                ('Jewelry', '[trigger], luxury jewelry piece, studio lighting, black background'),
-                ('Product', '[trigger], premium product photography, professional lighting')
-            ]
+        # Apply consistent button styling
+        button_style = {
+            'fg_color': self.themes.get_theme(self.is_dark_mode)['button'],
+            'hover_color': self.themes.get_theme(self.is_dark_mode)['highlight'],
+            'border_width': 0,
+            'corner_radius': 6
         }
         
-        # Create tabs for each category
-        for category, templates in categories.items():
-            tab = ttk.Frame(template_notebook)
-            template_notebook.add(tab, text=category)
-            
-            # Create buttons for templates in a grid
-            for i, (name, prompt) in enumerate(templates):
-                ttk.Button(tab, 
-                          text=name,
-                          command=lambda p=prompt: self.add_template_prompt(p)).grid(
-                              row=i//3, column=i%3, padx=5, pady=2, sticky='w')
+        # Apply consistent style to option menus
+        option_menu_style = {
+            'fg_color': self.themes.get_theme(self.is_dark_mode)['button'],
+            'button_color': self.themes.get_theme(self.is_dark_mode)['button'],
+            'button_hover_color': self.themes.get_theme(self.is_dark_mode)['highlight'],
+            'dropdown_fg_color': self.themes.get_theme(self.is_dark_mode)['frame'],
+            'dropdown_hover_color': self.themes.get_theme(self.is_dark_mode)['highlight'],
+            'text_color': self.themes.get_theme(self.is_dark_mode)['text'],
+            'border_width': 0,
+            'corner_radius': 6
+        }
+        
+        ctk.CTkButton(model_path_frame, text="Browse", command=lambda: self.browse_folder('model'), **button_style).pack(side='right')
+        
+        # Model Options
+        model_options_frame = ctk.CTkFrame(model_frame)
+        model_options_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkCheckBox(model_options_frame, text="Is Flux", variable=self.is_flux_var).pack(side='left', padx=5)
+        ctk.CTkCheckBox(model_options_frame, text="Quantize", variable=self.quantize_var).pack(side='left', padx=5)
+        
+        # Network Settings
+        network_frame = ctk.CTkFrame(left_column)
+        network_frame.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkLabel(network_frame, text="Network Settings").pack(anchor='w', padx=5, pady=2)
+        
+        linear_frame = ctk.CTkFrame(network_frame)
+        linear_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(linear_frame, text="Linear:").pack(side='left')
+        ctk.CTkEntry(linear_frame, textvariable=self.linear_var, width=80).pack(side='left', padx=5)
+        
+        alpha_frame = ctk.CTkFrame(network_frame)
+        alpha_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(alpha_frame, text="Alpha:").pack(side='left')
+        ctk.CTkEntry(alpha_frame, textvariable=self.linear_alpha_var, width=80).pack(side='left', padx=5)
+        
+        # Training Configuration (Right Column)
+        training_config_frame = ctk.CTkFrame(right_column)
+        training_config_frame.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkLabel(training_config_frame, text="Training Settings").pack(anchor='w', padx=5, pady=2)
+        
+        # Batch Size
+        batch_frame = ctk.CTkFrame(training_config_frame)
+        batch_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(batch_frame, text="Batch Size:").pack(side='left')
+        ctk.CTkEntry(batch_frame, textvariable=self.batch_size_var, width=80).pack(side='left', padx=5)
+        
+        # Steps
+        steps_frame = ctk.CTkFrame(training_config_frame)
+        steps_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(steps_frame, text="Steps:").pack(side='left')
+        self.steps_entry = ctk.CTkEntry(steps_frame, textvariable=self.steps_var, width=80)
+        self.steps_entry.pack(side='left', padx=5)
+        ctk.CTkCheckBox(steps_frame, text="Auto", variable=self.auto_steps_var, command=self.toggle_steps_entry).pack(side='left', padx=5)
+        
+        # Learning Rate
+        lr_frame = ctk.CTkFrame(training_config_frame)
+        lr_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(lr_frame, text="Learning Rate:").pack(side='left')
+        ctk.CTkOptionMenu(lr_frame, 
+                         variable=self.lr_var, 
+                         values=list(self.lr_presets.keys()),
+                         **option_menu_style).pack(side='left', padx=5)
+        
+        # Training Options
+        options_frame = ctk.CTkFrame(training_config_frame)
+        options_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkCheckBox(options_frame, text="Train U-Net", variable=self.train_unet_var).pack(anchor='w', padx=5, pady=2)
+        ctk.CTkCheckBox(options_frame, text="Train Text Encoder", variable=self.train_text_encoder_var).pack(anchor='w', padx=5, pady=2)
+        ctk.CTkCheckBox(options_frame, text="Gradient Checkpointing", variable=self.grad_checkpointing_var).pack(anchor='w', padx=5, pady=2)
+        
+        # Save Configuration
+        save_frame = ctk.CTkFrame(right_column)
+        save_frame.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkLabel(save_frame, text="Save Settings").pack(anchor='w', padx=5, pady=2)
+        
+        save_type_frame = ctk.CTkFrame(save_frame)
+        save_type_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(save_type_frame, text="Save Precision:").pack(side='left')
+        ctk.CTkOptionMenu(save_type_frame, 
+                         variable=self.save_dtype_var, 
+                         values=["float16", "float32"],
+                         **option_menu_style).pack(side='left', padx=5)
+        
+        # Bottom Buttons
+        button_frame = ctk.CTkFrame(self)
+        button_frame.pack(fill='x', padx=10, pady=5)
+        
+        # Apply consistent button styling
+        button_style = {
+            'fg_color': self.themes.get_theme(self.is_dark_mode)['button'],
+            'hover_color': self.themes.get_theme(self.is_dark_mode)['highlight'],
+            'border_width': 0,
+            'corner_radius': 6
+        }
+        
+        ctk.CTkButton(button_frame, text="Load Config", command=self.load_config_file, **button_style).pack(side='left', padx=5)
+        ctk.CTkButton(button_frame, text="Save Config", command=self.save_config, **button_style).pack(side='left', padx=5)
+        ctk.CTkButton(button_frame, text="Start Training", command=self.start_training, **button_style).pack(side='right', padx=5)
+        
+        # Progress Frame
+        progress_frame = ctk.CTkFrame(self)
+        progress_frame.pack(fill='x', padx=10, pady=5)
+        
+        self.progress_bar = ctk.CTkProgressBar(progress_frame)
+        self.progress_bar.pack(fill='x', padx=5, pady=5)
+        self.progress_bar.set(0)
+        
+        self.status_var = tk.StringVar(value="Ready")
+        self.status_label = ctk.CTkLabel(progress_frame, textvariable=self.status_var)
+        self.status_label.pack(anchor='w', padx=5)
+        
+        # Sample tab
+        sample_tab = self.main_notebook.add("Sample")
+        
+        # Left column for prompt settings
+        sample_left = ctk.CTkFrame(sample_tab)
+        sample_left.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        
+        # Right column for template options
+        sample_right = ctk.CTkFrame(sample_tab)
+        sample_right.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        
+        # Prompt Style Selection
+        style_frame = ctk.CTkFrame(sample_left)
+        style_frame.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkLabel(style_frame, text="Prompt Style:").pack(anchor='w', padx=5, pady=2)
+        
+        # Radio buttons for prompt styles
+        styles = ["Natural", "Danbooru", "Tags"]
+        for style in styles:
+            ctk.CTkRadioButton(style_frame, text=style, variable=self.prompt_style_var, 
+                             value=style, command=self.update_prompt_style).pack(anchor='w', padx=20, pady=2)
+        
+        # Sampling Settings
+        sampling_frame = ctk.CTkFrame(sample_left)
+        sampling_frame.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkLabel(sampling_frame, text="Sampling Settings").pack(anchor='w', padx=5, pady=2)
+        
+        # Enable sampling checkbox
+        ctk.CTkCheckBox(sampling_frame, text="Enable Sampling", 
+                       variable=self.enable_sampling_var).pack(anchor='w', padx=5, pady=2)
+        
+        # Sample every N steps
+        sample_every_frame = ctk.CTkFrame(sampling_frame)
+        sample_every_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(sample_every_frame, text="Sample Every:").pack(side='left')
+        ctk.CTkEntry(sample_every_frame, textvariable=self.sample_every_var, 
+                    width=80).pack(side='left', padx=5)
+        ctk.CTkLabel(sample_every_frame, text="steps").pack(side='left')
+        
+        # Seed settings
+        seed_frame = ctk.CTkFrame(sampling_frame)
+        seed_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(seed_frame, text="Seed:").pack(side='left')
+        ctk.CTkEntry(seed_frame, textvariable=self.seed_var, 
+                    width=80).pack(side='left', padx=5)
+        ctk.CTkCheckBox(seed_frame, text="Fixed Seed", 
+                       variable=self.use_fixed_seed_var).pack(side='left', padx=5)
+        
+        # Sampling steps
+        steps_frame = ctk.CTkFrame(sampling_frame)
+        steps_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(steps_frame, text="Sampling Steps:").pack(side='left')
+        ctk.CTkEntry(steps_frame, textvariable=self.sampling_steps_var, 
+                    width=80).pack(side='left', padx=5)
+        
+        # CFG Scale
+        cfg_frame = ctk.CTkFrame(sampling_frame)
+        cfg_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(cfg_frame, text="CFG Scale:").pack(side='left')
+        ctk.CTkEntry(cfg_frame, textvariable=self.cfg_scale_var, 
+                    width=80).pack(side='left', padx=5)
+        
+        # Template Options (Right Column)
+        template_frame = ctk.CTkFrame(sample_right)
+        template_frame.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkLabel(template_frame, text="Add Test Prompt:").pack(anchor='w', padx=5, pady=2)
+        
+        # Template buttons with descriptions
+        templates = {
+            "Person (Woman)": "Test the LoRA with a female character",
+            "Person (Man)": "Test the LoRA with a male character",
+            "Place": "Test the LoRA with a location or scene",
+            "Thing": "Test the LoRA with an object or item"
+        }
+        
+        for template_name, tooltip in templates.items():
+            template_button = ctk.CTkButton(
+                template_frame,
+                text=template_name,
+                command=lambda t=template_name: self.add_test_prompt(t),
+                fg_color=self.themes.get_theme(self.is_dark_mode)['button'],
+                hover_color=self.themes.get_theme(self.is_dark_mode)['highlight'],
+                border_width=0,
+                corner_radius=6
+            )
+            template_button.pack(anchor='w', padx=5, pady=2)
+            CreateToolTip(template_button, tooltip)
+        
+        # Prompt Text Area
+        prompt_frame = ctk.CTkFrame(sample_right)
+        prompt_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        ctk.CTkLabel(prompt_frame, text="Prompt:").pack(anchor='w', padx=5, pady=2)
+        
+        self.prompt_text = tk.Text(prompt_frame, height=10, wrap=tk.WORD)
+        self.prompt_text.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Initialize default prompts with trigger word placeholder
+        self.default_prompts = {
+            "Natural": {
+                "Person (Woman)": "A beautiful photograph of a <trigger> woman with long hair, standing in natural lighting, professional portrait",
+                "Person (Man)": "A professional photograph of a <trigger> man in casual attire, confident pose, studio lighting",
+                "Place": "A scenic view of a <trigger> location, beautiful lighting, high detail, professional photography",
+                "Thing": "A detailed photograph of a <trigger> object, studio lighting, professional product photography"
+            },
+            "Danbooru": {
+                "Person (Woman)": "1girl, <trigger>, solo, best quality, masterpiece, detailed, intricate details",
+                "Person (Man)": "1boy, <trigger>, solo, best quality, masterpiece, detailed, intricate details",
+                "Place": "<trigger>, landscape, scenery, no humans, best quality, masterpiece",
+                "Thing": "<trigger>, object focus, no humans, best quality, masterpiece, detailed"
+            },
+            "Tags": {
+                "Person (Woman)": "<trigger>, woman, portrait, (high quality), (best quality), (realistic), (photorealistic), (detailed)",
+                "Person (Man)": "<trigger>, man, portrait, (high quality), (best quality), (realistic), (photorealistic), (detailed)",
+                "Place": "<trigger>, location, (high quality), (best quality), (realistic), (photorealistic), (detailed)",
+                "Thing": "<trigger>, object, (high quality), (best quality), (realistic), (photorealistic), (detailed)"
+            }
+        }
 
-        # Text area with scrollbar
-        text_container = ttk.Frame(prompts_tab)
-        text_container.grid(row=1, column=0, sticky='nsew', padx=5, pady=5)
-        text_container.grid_columnconfigure(0, weight=1)
-        text_container.grid_rowconfigure(0, weight=1)
-        
-        self.prompt_text = tk.Text(text_container, height=8, width=70, wrap=tk.WORD)
-        self.prompt_text.grid(row=0, column=0, sticky='nsew')
-        
-        prompt_scrollbar = ttk.Scrollbar(text_container, orient="vertical", command=self.prompt_text.yview)
-        prompt_scrollbar.grid(row=0, column=1, sticky='ns')
-        self.prompt_text.configure(yscrollcommand=prompt_scrollbar.set)
-        
-        # Insert default text
-        self.prompt_text.insert('1.0', self.default_natural_prompt)
-        
-        # Sample Settings tab
-        settings_tab = ttk.Frame(sample_notebook)
-        sample_notebook.add(settings_tab, text="Settings")
-        settings_tab.grid_columnconfigure(1, weight=1)
-        
-        # Enable/Disable sampling
-        self.enable_sampling_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(settings_tab, text="Enable Sampling", 
-                       variable=self.enable_sampling_var).grid(row=0, column=0, columnspan=2, sticky='w', padx=5, pady=2)
-        
-        # Sample frequency
-        ttk.Label(settings_tab, text="Sample Every:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        self.sample_every_var = tk.StringVar(value="500")
-        ttk.Entry(settings_tab, textvariable=self.sample_every_var, width=10).grid(row=1, column=1, sticky='w', padx=5, pady=2)
-        CreateToolTip(settings_tab.winfo_children()[-1], "Generate samples every N steps (0 to disable)")
-        
-        # Sample settings
-        ttk.Label(settings_tab, text="Sampling Steps:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(settings_tab, textvariable=self.sampling_steps_var, width=10).grid(row=2, column=1, sticky='w', padx=5, pady=2)
-        CreateToolTip(settings_tab.winfo_children()[-1], "Number of steps for sample generation")
-
-        ttk.Label(settings_tab, text="CFG Scale:").grid(row=3, column=0, sticky='w', padx=5, pady=2)
-        ttk.Entry(settings_tab, textvariable=self.cfg_scale_var, width=10).grid(row=3, column=1, sticky='w', padx=5, pady=2)
-        CreateToolTip(settings_tab.winfo_children()[-1], "Classifier Free Guidance scale for sample generation")
-
-        # Add Batch Training tab
-        batch_tab = ttk.Frame(main_notebook)
-        main_notebook.add(batch_tab, text="Batch Training")
-        batch_tab.grid_columnconfigure(0, weight=1)
-        
-        # Batch list frame
-        batch_frame = ttk.LabelFrame(batch_tab, text="Training Queue")
-        batch_frame.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
-        batch_frame.grid_columnconfigure(0, weight=1)
-        
-        # Create treeview for batch list
-        self.batch_tree = ttk.Treeview(batch_frame, columns=('Name', 'Path'), show='headings', height=10)
-        self.batch_tree.heading('Name', text='Config Name')
-        self.batch_tree.heading('Path', text='Config Path')
-        self.batch_tree.column('Name', width=150)
-        self.batch_tree.column('Path', width=400)
-        self.batch_tree.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
-        
-        # Scrollbar for treeview
-        batch_scroll = ttk.Scrollbar(batch_frame, orient="vertical", command=self.batch_tree.yview)
-        batch_scroll.grid(row=0, column=1, sticky='ns')
-        self.batch_tree.configure(yscrollcommand=batch_scroll.set)
-        
-        # Buttons frame
-        batch_buttons_frame = ttk.Frame(batch_tab)
-        batch_buttons_frame.grid(row=1, column=0, sticky='ew', padx=5, pady=5)
-        
-        ttk.Button(batch_buttons_frame, text="Add Current to Batch", 
-                  command=self.add_to_batch).pack(side=tk.LEFT, padx=5)
-        ttk.Button(batch_buttons_frame, text="Add Config File", 
-                  command=self.add_config_to_batch).pack(side=tk.LEFT, padx=5)
-        ttk.Button(batch_buttons_frame, text="Remove Selected", 
-                  command=self.remove_from_batch).pack(side=tk.LEFT, padx=5)
-        ttk.Button(batch_buttons_frame, text="Clear Batch", 
-                  command=self.clear_batch).pack(side=tk.LEFT, padx=5)
-        ttk.Button(batch_buttons_frame, text="Start Batch Training", 
-                  command=self.start_batch_training).pack(side=tk.RIGHT, padx=5)
-
-        # Buttons at the bottom
-        buttons_frame = ttk.Frame(self.scrollable_frame)
-        buttons_frame.grid(row=current_row + 1, column=0, columnspan=2, sticky='ew', padx=5, pady=10)
-        buttons_frame.grid_columnconfigure(1, weight=1)
-        
-        # Config section on the left
-        config_section = ttk.Frame(buttons_frame)
-        config_section.grid(row=0, column=0, sticky='w')
-        
-        # Config buttons
-        config_buttons_frame = ttk.Frame(config_section)
-        config_buttons_frame.pack(side=tk.TOP, anchor='w')
-        
-        load_config_btn = ttk.Button(config_buttons_frame, text="Load Config", command=self.load_config_file)
-        load_config_btn.pack(side=tk.LEFT, padx=5)
-        
-        save_config_btn = ttk.Button(config_buttons_frame, text="Save Config", command=self.save_config)
-        save_config_btn.pack(side=tk.LEFT, padx=5)
-        
-        update_config_btn = ttk.Button(config_buttons_frame, text="Update Config", command=self.update_config)
-        update_config_btn.pack(side=tk.LEFT, padx=5)
-        
-        # Config label
-        config_label = ttk.Label(config_section, textvariable=self.current_config_label_var, 
-                               font=('TkDefaultFont', 8), foreground='gray')
-        config_label.pack(side=tk.TOP, anchor='w', padx=5, pady=(2, 0))
-        
-        # Start Training button on the right
-        start_training_btn = ttk.Button(buttons_frame, text="Start Training", command=self.start_training)
-        start_training_btn.grid(row=0, column=2, padx=5)
-
-    def count_dataset_files(self, folder):
-        """Count the number of images and caption files in the dataset folder"""
-        image_extensions = {'.png', '.jpg', '.jpeg', '.webp'}
-        caption_extensions = {'.txt', '.caption'}
-        
-        image_count = 0
-        caption_count = 0
-        
-        try:
-            for file in os.listdir(folder):
-                lower_file = file.lower()
-                ext = os.path.splitext(lower_file)[1]
-                if ext in image_extensions:
-                    image_count += 1
-                elif ext in caption_extensions:
-                    caption_count += 1
-            
-            return image_count, caption_count
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to count files: {str(e)}")
-            return 0, 0
-
-    def update_prompt_style(self):
-        """Update the prompt text based on selected style"""
+    def add_test_prompt(self, template_type):
+        """Add a test prompt with the current trigger word"""
         style = self.prompt_style_var.get()
-        self.prompt_text.delete('1.0', tk.END)
+        trigger_word = self.trigger_word_var.get() or "<trigger>"
         
-        if style == "Natural":
-            self.prompt_text.insert('1.0', self.default_natural_prompt)
-        elif style == "Danbooru":
-            self.prompt_text.insert('1.0', self.default_danbooru_prompt)
-        elif style == "T5":
-            self.prompt_text.insert('1.0', self.default_t5_prompt)
-
-    def add_template_prompt(self, prompt):
-        """Add template prompt to the text area"""
+        # Get the template and replace the trigger placeholder
+        template = self.default_prompts[style][template_type]
+        prompt = template.replace("<trigger>", trigger_word)
+        
         # Add newline if there's already text
         if self.prompt_text.get('1.0', tk.END).strip():
             self.prompt_text.insert(tk.END, '\n\n')
         self.prompt_text.insert(tk.END, prompt)
+
+    def update_prompt_style(self):
+        """Update the prompt text based on selected style"""
+        style = self.prompt_style_var.get()
+        trigger_word = self.trigger_word_var.get() or "<trigger>"
+        
+        # Clear existing text
+        self.prompt_text.delete('1.0', tk.END)
+        
+        # Add example prompt for the selected style
+        example = self.default_prompts[style]["Person (Woman)"].replace("<trigger>", trigger_word)
+        self.prompt_text.insert('1.0', example)
 
     def prepare_config(self):
         """Prepare the configuration dictionary"""
@@ -731,8 +520,8 @@ Produce an ultra-realistic image of [trigger] in a grand ballroom setting with a
                 'height': 1024,  # Default size
                 'prompts': prompts,
                 'neg': '',  # Not used for flux
-                'seed': 42,
-                'walk_seed': True,
+                'seed': int(self.seed_var.get()),
+                'walk_seed': self.use_fixed_seed_var.get(),
                 'guidance_scale': float(self.cfg_scale_var.get()),
                 'sample_steps': int(self.sampling_steps_var.get())
             }
@@ -815,50 +604,81 @@ Produce an ultra-realistic image of [trigger] in a grand ballroom setting with a
                 messagebox.showerror("Error", f"Failed to save configuration: {str(e)}")
 
     def start_training(self):
-        """Start the training process"""
+        """Start the training process with progress updates"""
         try:
             config = self.prepare_config()
-
+            total_steps = int(self.steps_var.get())
+            
             # Create output folder if it doesn't exist
             os.makedirs(self.output_folder_var.get(), exist_ok=True)
             
-            # Use the current config file if one is loaded, otherwise create a temporary one
+            # Save or update config file
             if self.current_config_path:
                 config_path = self.current_config_path
-                # Update the current config file
                 with open(config_path, 'w', encoding='utf-8') as f:
                     yaml.dump(config, f, default_flow_style=False, sort_keys=False)
             else:
-                # Create a temporary config file
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_config:
                     yaml.dump(config, temp_config, default_flow_style=False, sort_keys=False)
                     config_path = temp_config.name
             
-            # Get the path to run.py in the same directory as the GUI script
+            # Get the path to run.py
             script_dir = os.path.dirname(os.path.abspath(__file__))
             train_script = os.path.join(script_dir, "run.py")
             
-            # Start training in a separate process - pass config path as positional argument
-            process = subprocess.Popen([sys.executable, train_script, config_path])
+            # Start training process with pipe for output
+            process = subprocess.Popen([sys.executable, train_script, config_path],
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE,
+                                     universal_newlines=True,
+                                     bufsize=1)
             
-            # If using a temporary config, set up cleanup
-            if not self.current_config_path:
-                def cleanup_temp_config():
-                    process.wait()
-                    try:
-                        os.unlink(config_path)
-                    except:
-                        pass  # Ignore errors in cleanup
+            def monitor_progress():
+                """Monitor training progress from process output"""
+                current_step = 0
+                while True:
+                    line = process.stdout.readline()
+                    if not line and process.poll() is not None:
+                        break
+                    
+                    # Parse progress from output
+                    if "Step:" in line:
+                        try:
+                            current_step = int(line.split("Step:")[1].split("/")[0])
+                            self.update_progress(current_step, total_steps)
+                        except:
+                            pass
+                    
+                    # Update status with any errors
+                    if process.poll() is not None:
+                        error = process.stderr.read()
+                        if error:
+                            self.status_var.set(f"Error: {error.strip()}")
+                        break
                 
-                # Start cleanup thread
-                cleanup_thread = threading.Thread(target=cleanup_temp_config)
-                cleanup_thread.daemon = True
-                cleanup_thread.start()
+                # Training completed
+                if process.returncode == 0:
+                    self.update_progress(total_steps, total_steps, "Training completed")
+                else:
+                    self.status_var.set("Training failed")
+            
+            # Start progress monitoring in a separate thread
+            progress_thread = threading.Thread(target=monitor_progress)
+            progress_thread.daemon = True
+            progress_thread.start()
             
             messagebox.showinfo("Success", f"Training started with config: {os.path.basename(config_path)}")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start training: {str(e)}")
+
+    def update_progress(self, current_step, total_steps, status="Training"):
+        """Update the progress display"""
+        progress = (current_step / total_steps) * 100 if total_steps > 0 else 0
+        self.progress_bar.set(progress)
+        self.step_var.set(f"Step: {current_step}/{total_steps}")
+        self.status_var.set(status)
+        self.master.update_idletasks()
 
     def save_last_settings(self):
         """Save current settings to JSON file"""
@@ -892,7 +712,8 @@ Produce an ultra-realistic image of [trigger] in a grand ballroom setting with a
             'prompt_style': self.prompt_style_var.get(),
             'prompt_text': self.prompt_text.get('1.0', tk.END).strip(),
             'resolutions': {size: data['var'].get() for size, data in self.resolution_vars.items()},
-            'batch_configs': self.batch_configs  # Save batch configs
+            'batch_configs': self.batch_configs,  # Save batch configs
+            'dark_mode': self.is_dark_mode
         }
         
         try:
@@ -963,6 +784,9 @@ Produce an ultra-realistic image of [trigger] in a grand ballroom setting with a
                 if os.path.exists(config_path):
                     self.batch_tree.insert('', 'end', values=(os.path.basename(config_path), config_path))
                 
+            # Load theme preference
+            self.is_dark_mode = settings.get('dark_mode', True)
+            
         except Exception as e:
             print(f"Failed to load settings: {str(e)}")
 
@@ -1095,16 +919,248 @@ Produce an ultra-realistic image of [trigger] in a grand ballroom setting with a
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start batch training: {str(e)}")
 
+    def add_theme_toggle(self):
+        """Add theme toggle button to the GUI"""
+        self.theme_button = ctk.CTkButton(
+            self.master,
+            text="🌙" if self.is_dark_mode else "☀️",
+            command=self.toggle_theme,
+            width=30,
+            height=30
+        )
+        self.theme_button.pack(anchor='ne', padx=5, pady=5)
+
+    def toggle_theme(self):
+        """Toggle between light and dark themes"""
+        self.is_dark_mode = not self.is_dark_mode
+        self.themes.apply_theme(self.master, self.is_dark_mode)
+        
+        # Update frame colors
+        frame_color = self.themes.get_theme(self.is_dark_mode)['frame']
+        for widget in self.scrollable_frame.winfo_children():
+            if isinstance(widget, ctk.CTkFrame):
+                widget.configure(fg_color=frame_color)
+                # Update nested frames
+                for child in widget.winfo_children():
+                    if isinstance(child, ctk.CTkFrame):
+                        child.configure(fg_color=frame_color)
+        
+        self.theme_button.configure(text="🌙" if self.is_dark_mode else "☀️")
+        self.save_theme_preference()
+
+    def load_theme_preference(self):
+        """Load theme preference from settings file"""
+        try:
+            if os.path.exists('last_settings.json'):
+                with open('last_settings.json', 'r') as f:
+                    settings = json.load(f)
+                    return settings.get('dark_mode', True)
+        except:
+            pass
+        return True  # Default to dark mode
+
+    def save_theme_preference(self):
+        """Save theme preference to settings file"""
+        try:
+            settings = {}
+            if os.path.exists('last_settings.json'):
+                with open('last_settings.json', 'r') as f:
+                    settings = json.load(f)
+            
+            settings['dark_mode'] = self.is_dark_mode
+            
+            with open('last_settings.json', 'w') as f:
+                json.dump(settings, f, indent=4)
+        except:
+            pass
+
+    def toggle_steps_entry(self):
+        """Toggle the steps entry between auto and manual"""
+        if self.auto_steps_var.get():
+            # If switching to auto, update with suggested steps
+            if self.data_folder_var.get():
+                image_count, _ = self.count_dataset_files(self.data_folder_var.get())
+                self.update_suggested_steps(image_count)
+        
+        # Enable/disable steps entry based on auto_steps_var
+        if hasattr(self, 'steps_entry'):
+            self.steps_entry.configure(state='disabled' if self.auto_steps_var.get() else 'normal')
+
+    def calculate_suggested_steps(self, image_count):
+        """Calculate suggested training steps based on image count"""
+        if image_count <= 0:
+            return 5000  # Default value
+        
+        # Get current learning rate value
+        selected_lr = self.lr_var.get()
+        lr_value = float(self.lr_presets[selected_lr]['value'] if selected_lr in self.lr_presets else selected_lr)
+        
+        # Base calculation: roughly 100 steps per image
+        suggested = image_count * 100
+        
+        # Adjust steps based on learning rate
+        # Use 1e-4 as the baseline learning rate
+        lr_multiplier = 1e-4 / lr_value
+        suggested = int(suggested * lr_multiplier)
+        
+        # Round to nearest 500
+        suggested = round(suggested / 500) * 500
+        
+        # Set minimum and maximum values
+        suggested = max(1000, min(suggested, 10000))
+        
+        return suggested
+
+    def update_suggested_steps(self, image_count):
+        """Update steps based on auto calculation"""
+        if self.auto_steps_var.get():
+            suggested = self.calculate_suggested_steps(image_count)
+            self.steps_var.set(str(suggested))
+
+    def get_template_text(self, template_type):
+        """Get the template text based on the template type"""
+        templates = {
+            "Character": """Character Description:
+Gender: [male/female]
+Character Type: [human/fantasy/sci-fi]
+Age Range: [child/young/adult/elderly]
+
+Physical Appearance:
+- Hair: [color, style, length, texture]
+- Eyes: [color, shape, unique features]
+- Face: [shape, complexion, notable features]
+- Build: [height, body type, physique]
+
+Attire:
+- Style: [casual/formal/fantasy/futuristic]
+- Main Clothing: [specific items, colors]
+- Accessories: [jewelry, gadgets, props]
+
+Pose & Expression:
+- Pose: [standing/sitting/action/dynamic]
+- Expression: [emotion, intensity]
+- Gesture: [hand position, body language]
+
+Additional Details:
+- Lighting: [natural/studio/dramatic]
+- Background: [simple/detailed/environment]
+- Special Effects: [glow/particles/aura]
+
+Quality & Style Tags:
+(masterpiece, best quality, highly detailed, ultra realistic, photorealistic, 8k, sharp focus)
+Style Options: [cartoon/anime/photorealistic/hyperrealistic]
+Additional Tags: [cinematic, dramatic lighting, professional photography]""",
+            
+            "Style": """Art Style Description:
+Base Style:
+- Type: [cartoon/anime/photorealistic/hyperrealistic]
+- Medium: [digital/traditional/mixed media]
+- Rendering: [2D/3D/hybrid]
+
+Visual Quality:
+- Resolution: [8k/4k/high resolution]
+- Detail Level: [highly detailed/ultra detailed/intricate]
+- Sharpness: [sharp focus/crystal clear]
+
+Lighting & Atmosphere:
+- Main Light: [natural/studio/dramatic/cinematic]
+- Time of Day: [golden hour/blue hour/midday/night]
+- Mood: [bright/moody/atmospheric]
+
+Color & Technique:
+- Color Palette: [warm/cool/vibrant/muted/pastel]
+- Color Grading: [HDR/film-like/stylized]
+- Technique: [brush strokes/lineart/painterly/photographic]
+
+Professional Elements:
+- Camera: [professional photography/cinematic/portrait lens]
+- Post-processing: [color grading/professional retouching]
+- Composition: [rule of thirds/dynamic/balanced]
+
+Quality Tags:
+(masterpiece, best quality, highly detailed)
+(professional lighting, perfect composition)
+(ultra realistic, photorealistic, hyperrealistic)
+Style-specific Tags: [add based on chosen style]""",
+            
+            "Scene": """Scene Description:
+Location: [indoor/outdoor setting]
+Time: [day/night/sunset]
+Weather: [clear/rainy/snowy]
+Lighting: [natural/artificial/dramatic]
+Atmosphere: [peaceful/tense/magical]
+Background Elements: [furniture/nature/buildings]
+Additional Details: [mood, special effects]""",
+            
+            "Object": """Object Description:
+Type: [item category]
+Material: [metal/wood/fabric/etc]
+Size: [small/medium/large]
+Color: [main colors]
+Texture: [smooth/rough/patterned]
+Condition: [new/worn/antique]
+Special Features: [unique characteristics]""",
+            
+            "Custom": """[Your custom template structure]
+Element 1: [description]
+Element 2: [description]
+Element 3: [description]
+...
+Additional Notes: [any special instructions]"""
+        }
+        
+        return templates.get(template_type, "Template not found")
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Flux Training GUI")
     
-    # Center the window on screen
+    # Make window borderless
+    root.overrideredirect(True)
+    
+    # Add a close button in the top-right corner
+    close_button = ctk.CTkButton(
+        root,
+        text="×",
+        width=30,
+        height=30,
+        command=root.destroy,
+        fg_color="transparent",
+        hover_color="#FF4444"
+    )
+    close_button.pack(anchor='ne', padx=5, pady=5)
+    
+    # Make window draggable
+    def start_move(event):
+        root.x = event.x
+        root.y = event.y
+
+    def stop_move(event):
+        root.x = None
+        root.y = None
+
+    def do_move(event):
+        deltax = event.x - root.x
+        deltay = event.y - root.y
+        x = root.winfo_x() + deltax
+        y = root.winfo_y() + deltay
+        root.geometry(f"+{x}+{y}")
+
+    root.bind("<ButtonPress-1>", start_move)
+    root.bind("<ButtonRelease-1>", stop_move)
+    root.bind("<B1-Motion>", do_move)
+    
+    # Center the window but let it size to content
     screen_width = root.winfo_screenwidth()
     screen_height = root.winfo_screenheight()
-    x = (screen_width - 768) // 2
+    x = (screen_width - 500) // 2
     y = (screen_height - 512) // 2
-    root.geometry(f"768x512+{x}+{y}")
+    root.geometry(f"+{x}+{y}")
     
     app = FluxTrainingGUI(root)
+    
+    # Update window size to fit content
+    root.update_idletasks()
+    root.geometry('')
+    
     root.mainloop() 
