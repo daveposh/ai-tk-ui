@@ -2,14 +2,18 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import yaml
 import os
+import sys
+import subprocess
 import chardet
 import threading
-import subprocess
-import sys
 import json
 import tempfile
 from themes import Themes
 import customtkinter as ctk
+
+# Add the Windows-specific flag import
+if sys.platform == "win32":
+    from subprocess import CREATE_NO_WINDOW
 
 class CreateToolTip:
     """Create a tooltip for a given widget"""
@@ -755,18 +759,65 @@ class FluxTrainingGUI(ctk.CTkFrame):
         if not file_path:
             file_path = default_path
         
-        try:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            self.current_config_path = file_path
-            self.current_config_label_var.set(f"Loaded: {os.path.basename(file_path)}")
-            messagebox.showinfo("Success", "Configuration saved successfully!")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save configuration: {str(e)}")
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+                self.current_config_path = file_path
+                self.current_config_label_var.set(f"Loaded: {os.path.basename(file_path)}")
+                messagebox.showinfo("Success", "Configuration saved successfully!")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save configuration: {str(e)}")
+
+    def convert_captions_to_utf8(self, folder_path):
+        """Convert caption files to UTF-8 encoding"""
+        caption_files = []
+        for file in os.listdir(folder_path):
+            if file.lower().endswith(('.txt', '.caption')):
+                caption_files.append(os.path.join(folder_path, file))
+        
+        converted = 0
+        for file_path in caption_files:
+            try:
+                # Detect the file encoding
+                with open(file_path, 'rb') as f:
+                    raw_data = f.read()
+                    result = chardet.detect(raw_data)
+                    encoding = result['encoding']
+                
+                # Read with detected encoding and write as UTF-8
+                with open(file_path, 'r', encoding=encoding) as f:
+                    content = f.read()
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                converted += 1
+            except Exception as e:
+                print(f"Error converting {file_path}: {str(e)}")
+        
+        return converted, len(caption_files)
 
     def start_training(self):
         """Start the training process with progress updates"""
         try:
+            # Read paths from config.yaml
+            config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+            if not os.path.exists(config_file):
+                messagebox.showerror("Error", "Could not find config.yaml. Please ensure it exists in the same directory as gui.py")
+                return
+                
+            with open(config_file, 'r') as f:
+                paths_config = yaml.safe_load(f)
+                
+            python_path = paths_config.get('python_path')
+            train_script = paths_config.get('script_path')
+            
+            if not python_path or not train_script:
+                messagebox.showerror("Error", "Missing required paths in config.yaml. Please check the configuration.")
+                return
+                
+            if not os.path.exists(python_path) or not os.path.exists(train_script):
+                messagebox.showerror("Error", "Python or training script path not found. Please check config.yaml")
+                return
+                
             # Validate required fields
             if not self.model_path_var.get():
                 messagebox.showerror("Error", "Please select a model path.")
@@ -781,6 +832,14 @@ class FluxTrainingGUI(ctk.CTkFrame):
                 messagebox.showerror("Error", "Please enter a name for the training.")
                 return
 
+            # Convert captions to UTF-8 if enabled
+            if self.convert_utf8_var.get():
+                self.status_var.set("Converting captions to UTF-8...")
+                converted, total = self.convert_captions_to_utf8(self.data_folder_var.get())
+                if converted > 0:
+                    self.status_var.set(f"Converted {converted}/{total} caption files to UTF-8")
+                    self.master.update_idletasks()
+
             config = self.prepare_config()
             total_steps = int(self.steps_var.get())
 
@@ -792,74 +851,125 @@ class FluxTrainingGUI(ctk.CTkFrame):
             with open(config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(config, f, default_flow_style=False, sort_keys=False)
             
-            # Read AI toolkit path from config.txt
-            config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt")
-            if not os.path.exists(config_file):
-                messagebox.showerror("Error", "Could not find config.txt. Please ensure the startup script created it properly.")
-                return
-                
-            try:
-                with open(config_file, 'r') as f:
-                    toolkit_path = f.read().strip()
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to read config.txt: {str(e)}")
-                return
-            
-            # Get the path to run.py from the AI toolkit installation
-            train_script = os.path.join(toolkit_path, "run.py")
-            
-            if not os.path.exists(train_script):
-                messagebox.showerror("Error", f"Could not find run.py at {train_script}. Please ensure the AI toolkit path in config.txt is correct.")
-                return
-            
             # Reset progress
             self.progress_bar.set(0)
             self.status_var.set("Starting training...")
             self.step_var.set(f"Step: 0/{total_steps}")
+            self.master.update_idletasks()
             
             # Start training process with pipe for output
-            process = subprocess.Popen([sys.executable, train_script, config_path],
+            process = subprocess.Popen([python_path, train_script, config_path],
                                      stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE,
                                      universal_newlines=True,
-                                     bufsize=1)
+                                     bufsize=1,
+                                     creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0)
             
             def monitor_progress():
                 """Monitor training progress from process output"""
                 current_step = 0
+                baseline_samples_started = False
+                training_started = False
+                
                 while True:
-                    line = process.stdout.readline()
-                    if not line and process.poll() is not None:
-                        break
-                    
-                    print(line.strip())  # Print output for debugging
-                    
-                    # Parse progress from output
-                    if "Step:" in line:
-                        try:
-                            current_step = int(line.split("Step:")[1].split("/")[0])
-                            progress = (current_step / total_steps) if total_steps > 0 else 0
-                            self.progress_bar.set(progress)
-                            self.step_var.set(f"Step: {current_step}/{total_steps}")
+                    try:
+                        line = process.stdout.readline()
+                        if not line and process.poll() is not None:
+                            break
+                        
+                        line = line.strip()
+                        print(line)  # Print output for debugging
+                        
+                        # Update status for different training phases
+                        if "preparing" in line.lower():
+                            self.status_var.set("Preparing training environment...")
+                        elif "create LoRA network" in line:
+                            self.status_var.set("Creating LoRA network...")
+                        elif "Preprocessing image dimensions" in line:
+                            self.status_var.set("Preprocessing images...")
+                        elif "Caching latents" in line:
+                            self.status_var.set("Caching latents...")
+                        elif "Generating baseline samples" in line:
+                            baseline_samples_started = True
+                            self.status_var.set("Generating baseline samples (this may take a few minutes)...")
+                        elif "Training:" in line:
+                            training_started = True
+                            baseline_samples_started = False
                             self.status_var.set("Training in progress...")
-                        except Exception as e:
-                            print(f"Error parsing progress: {str(e)}")
+                        
+                        # Show baseline samples progress
+                        if baseline_samples_started and "Generating sample" in line:
+                            try:
+                                sample_num = int(line.split("sample")[1].split()[0])
+                                self.status_var.set(f"Generating baseline sample {sample_num}...")
+                                self.progress_bar.set(0.1)  # Show some progress during baseline
+                            except:
+                                pass
+                        
+                        # Parse progress from output once training starts
+                        if training_started and "Step" in line:
+                            try:
+                                # Try different formats of step output
+                                if "Training:" in line:
+                                    step_text = line.split("Step")[1].strip().split("/")[0]
+                                else:
+                                    # Try to find step number in other formats
+                                    import re
+                                    step_match = re.search(r'Step[:\s]+(\d+)', line)
+                                    if step_match:
+                                        step_text = step_match.group(1)
+                                    else:
+                                        continue
+                                
+                                current_step = int(step_text)
+                                progress = (current_step / total_steps) if total_steps > 0 else 0
+                                self.progress_bar.set(progress)
+                                self.step_var.set(f"Step: {current_step}/{total_steps}")
+                                self.status_var.set(f"Training in progress - Step {current_step} of {total_steps}")
+                                self.master.update_idletasks()
+                            except Exception as e:
+                                print(f"Error parsing progress: {str(e)}")
+                        
+                        # Check for errors or completion messages
+                        if "Error" in line or "error" in line.lower():
+                            self.status_var.set(f"Error: {line}")
+                            self.master.update_idletasks()
+                            print(f"Training error: {line}")  # Print error for debugging
+                            break
+                        elif "Training completed" in line:
+                            self.progress_bar.set(1.0)
+                            self.step_var.set(f"Step: {total_steps}/{total_steps}")
+                            self.status_var.set("Training completed successfully!")
+                            self.master.update_idletasks()
+                            break
+                        
+                        # Update UI
+                        self.master.update_idletasks()
+                        
+                    except Exception as e:
+                        print(f"Error in progress monitoring: {str(e)}")
+                        continue
                     
-                    # Update status with any errors
+                    # Check if process has ended
                     if process.poll() is not None:
                         error = process.stderr.read()
                         if error:
                             print(f"Error output: {error}")  # Print error for debugging
                             self.status_var.set(f"Error: {error.strip()}")
+                            self.master.update_idletasks()
                         break
                 
-                # Training completed or failed
+                # Final status update
                 if process.returncode == 0:
-                    self.progress_bar.set(1.0)
-                    self.step_var.set(f"Step: {total_steps}/{total_steps}")
-                    self.status_var.set("Training completed successfully!")
+                    if current_step >= total_steps:
+                        self.progress_bar.set(1.0)
+                        self.step_var.set(f"Step: {total_steps}/{total_steps}")
+                        self.status_var.set("Training completed successfully!")
+                    else:
+                        self.status_var.set("Process ended before completion")
                 else:
                     self.status_var.set("Training failed. Check console for errors.")
+                self.master.update_idletasks()
             
             # Start progress monitoring in a separate thread
             progress_thread = threading.Thread(target=monitor_progress)
