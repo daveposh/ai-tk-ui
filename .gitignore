@@ -5,6 +5,7 @@ ai-toolkit
 
 # Configuration and sensitive files
 config.yaml
+*.yaml
 config.txt
 last_settings.json
 *.json        # Add this to prevent any JSON files from being tracked
@@ -29,4 +30,7 @@ venv/
 
 # Windows
 Thumbs.db
-desktop.ini 
+desktop.ini
+
+# New file
+current_train.yaml 
