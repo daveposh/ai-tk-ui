@@ -10,6 +10,8 @@ import json
 import tempfile
 from themes import Themes
 import customtkinter as ctk
+import logging
+from datetime import datetime
 
 # Add the Windows-specific flag import
 if sys.platform == "win32":
@@ -44,9 +46,17 @@ class CreateToolTip:
 
 class FluxTrainingGUI(ctk.CTkFrame):
     def __init__(self, master=None, config=None):
+        # Setup logging
+        self.setup_logging()
+        
         # Initialize theme first
         self.themes = Themes()
         self.is_dark_mode = self.load_theme_preference()
+        
+        # Default paths
+        self.app_dir = os.path.dirname(os.path.abspath(__file__))
+        self.settings_file = os.path.join(self.app_dir, "last_settings.json")
+        self.current_train_file = os.path.join(self.app_dir, "current_train.yaml")
         
         # Configure root window background color (using _configure_window for tk.Tk)
         if isinstance(master, tk.Tk):
@@ -70,9 +80,6 @@ class FluxTrainingGUI(ctk.CTkFrame):
         
         # Configure frame colors
         self.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['bg'])
-        
-        # Settings file path
-        self.settings_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_settings.json")
         
         # Initialize variables
         self.initialize_variables()
@@ -105,6 +112,22 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Now apply theme after all widgets are created
         self.themes.apply_theme(self.master, self.is_dark_mode)
         self.add_theme_toggle()
+
+        self.training_config_path = None
+        self.current_config = {}  # Store the current configuration state
+
+    def setup_logging(self):
+        """Setup logging configuration"""
+        log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gui.log')
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
 
     def _find_root_window(self, widget):
         """Find the root window by traversing up the widget hierarchy"""
@@ -728,45 +751,46 @@ class FluxTrainingGUI(ctk.CTkFrame):
 
     def save_config(self):
         """Save the current configuration to a YAML file"""
-        config = self.prepare_config()
-        
-        # Get the output folder and name from the current settings
-        output_folder = self.output_folder_var.get()
-        name = self.name_var.get()
-        
-        if not output_folder:
-            messagebox.showerror("Error", "Please set an output folder first.")
-            return
+        try:
+            config = self.prepare_config()
             
-        if not name:
-            messagebox.showerror("Error", "Please set a name for the configuration.")
-            return
+            output_folder = self.output_folder_var.get()
+            name = self.name_var.get()
             
-        # Create output folder if it doesn't exist
-        os.makedirs(output_folder, exist_ok=True)
-        
-        # Default file path in output folder
-        default_path = os.path.join(output_folder, f"{name}_config.yaml")
-        
-        file_path = filedialog.asksaveasfilename(
-            initialdir=output_folder,
-            initialfile=f"{name}_config.yaml",
-            defaultextension=".yaml",
-            filetypes=[("YAML files", "*.yaml"), ("All files", "*.*")]
-        )
-        
-        # If user cancels, use default path
-        if not file_path:
-            file_path = default_path
-        
-            try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-                self.current_config_path = file_path
-                self.current_config_label_var.set(f"Loaded: {os.path.basename(file_path)}")
-                messagebox.showinfo("Success", "Configuration saved successfully!")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to save configuration: {str(e)}")
+            if not output_folder:
+                raise ValueError("Please set an output folder first.")
+                
+            if not name:
+                raise ValueError("Please set a name for the configuration.")
+                
+            os.makedirs(output_folder, exist_ok=True)
+            
+            default_path = os.path.join(output_folder, f"{name}_config.yaml")
+            
+            file_path = filedialog.asksaveasfilename(
+                initialdir=output_folder,
+                initialfile=f"{name}_config.yaml",
+                defaultextension=".yaml",
+                filetypes=[("YAML files", "*.yaml"), ("All files", "*.*")]
+            )
+            
+            if not file_path:
+                file_path = default_path
+            
+            with open(file_path, 'w', encoding='utf-8') as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            
+            self.current_config_path = file_path
+            self.current_config = config
+            self.current_config_label_var.set(f"Loaded: {os.path.basename(file_path)}")
+            self.save_current_train()  # Save as current training config
+            
+            messagebox.showinfo("Success", "Configuration saved successfully!")
+            
+        except Exception as e:
+            error_msg = f"Failed to save configuration: {str(e)}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
 
     def convert_captions_to_utf8(self, folder_path):
         """Convert caption files to UTF-8 encoding"""
@@ -796,191 +820,47 @@ class FluxTrainingGUI(ctk.CTkFrame):
         return converted, len(caption_files)
 
     def start_training(self):
-        """Start the training process with progress updates"""
+        """Start training with current UI state"""
         try:
-            # Read paths from config.yaml
-            config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
-            if not os.path.exists(config_file):
-                messagebox.showerror("Error", "Could not find config.yaml. Please ensure it exists in the same directory as gui.py")
-                return
-                
-            with open(config_file, 'r') as f:
-                paths_config = yaml.safe_load(f)
-                
-            python_path = paths_config.get('python_path')
-            train_script = paths_config.get('script_path')
-            
-            if not python_path or not train_script:
-                messagebox.showerror("Error", "Missing required paths in config.yaml. Please check the configuration.")
-                return
-                
-            if not os.path.exists(python_path) or not os.path.exists(train_script):
-                messagebox.showerror("Error", "Python or training script path not found. Please check config.yaml")
-                return
-                
-            # Validate required fields
-            if not self.model_path_var.get():
-                messagebox.showerror("Error", "Please select a model path.")
-                return
-            if not self.data_folder_var.get():
-                messagebox.showerror("Error", "Please select a data folder.")
-                return
-            if not self.output_folder_var.get():
-                messagebox.showerror("Error", "Please select an output folder.")
-                return
-            if not self.name_var.get():
-                messagebox.showerror("Error", "Please enter a name for the training.")
-                return
-
-            # Convert captions to UTF-8 if enabled
-            if self.convert_utf8_var.get():
-                self.status_var.set("Converting captions to UTF-8...")
-                converted, total = self.convert_captions_to_utf8(self.data_folder_var.get())
-                if converted > 0:
-                    self.status_var.set(f"Converted {converted}/{total} caption files to UTF-8")
-                    self.master.update_idletasks()
-
+            # Get current UI state
             config = self.prepare_config()
-            total_steps = int(self.steps_var.get())
-
-            # Create output folder if it doesn't exist
-            os.makedirs(self.output_folder_var.get(), exist_ok=True)
             
-            # Save config file in output folder
-            config_path = os.path.join(self.output_folder_var.get(), f"{self.name_var.get()}_config.yaml")
-            with open(config_path, 'w', encoding='utf-8') as f:
+            # Save current state to current_train.yaml
+            with open(self.current_train_file, 'w') as f:
                 yaml.dump(config, f, default_flow_style=False, sort_keys=False)
             
-            # Reset progress
-            self.progress_bar.set(0)
-            self.status_var.set("Starting training...")
-            self.step_var.set(f"Step: 0/{total_steps}")
-            self.master.update_idletasks()
+            # Load paths from config.yaml (created by start.bat)
+            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
             
-            # Start training process with pipe for output
-            process = subprocess.Popen([python_path, train_script, config_path],
-                                     stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE,
-                                     universal_newlines=True,
-                                     bufsize=1,
-                                     creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+            if not os.path.exists(config_path):
+                raise FileNotFoundError("config.yaml not found. Please run start.bat first.")
             
-            def monitor_progress():
-                """Monitor training progress from process output"""
-                current_step = 0
-                baseline_samples_started = False
-                training_started = False
-                
-                while True:
-                    try:
-                        line = process.stdout.readline()
-                        if not line and process.poll() is not None:
-                            break
-                        
-                        line = line.strip()
-                        print(line)  # Print output for debugging
-                        
-                        # Update status for different training phases
-                        if "preparing" in line.lower():
-                            self.status_var.set("Preparing training environment...")
-                        elif "create LoRA network" in line:
-                            self.status_var.set("Creating LoRA network...")
-                        elif "Preprocessing image dimensions" in line:
-                            self.status_var.set("Preprocessing images...")
-                        elif "Caching latents" in line:
-                            self.status_var.set("Caching latents...")
-                        elif "Generating baseline samples" in line:
-                            baseline_samples_started = True
-                            self.status_var.set("Generating baseline samples (this may take a few minutes)...")
-                        elif "Training:" in line:
-                            training_started = True
-                            baseline_samples_started = False
-                            self.status_var.set("Training in progress...")
-                        
-                        # Show baseline samples progress
-                        if baseline_samples_started and "Generating sample" in line:
-                            try:
-                                sample_num = int(line.split("sample")[1].split()[0])
-                                self.status_var.set(f"Generating baseline sample {sample_num}...")
-                                self.progress_bar.set(0.1)  # Show some progress during baseline
-                            except:
-                                pass
-                        
-                        # Parse progress from output once training starts
-                        if training_started and "Step" in line:
-                            try:
-                                # Try different formats of step output
-                                if "Training:" in line:
-                                    step_text = line.split("Step")[1].strip().split("/")[0]
-                                else:
-                                    # Try to find step number in other formats
-                                    import re
-                                    step_match = re.search(r'Step[:\s]+(\d+)', line)
-                                    if step_match:
-                                        step_text = step_match.group(1)
-                                    else:
-                                        continue
-                                
-                                current_step = int(step_text)
-                                progress = (current_step / total_steps) if total_steps > 0 else 0
-                                self.progress_bar.set(progress)
-                                self.step_var.set(f"Step: {current_step}/{total_steps}")
-                                self.status_var.set(f"Training in progress - Step {current_step} of {total_steps}")
-                                self.master.update_idletasks()
-                            except Exception as e:
-                                print(f"Error parsing progress: {str(e)}")
-                        
-                        # Check for errors or completion messages
-                        if "Error" in line or "error" in line.lower():
-                            self.status_var.set(f"Error: {line}")
-                            self.master.update_idletasks()
-                            print(f"Training error: {line}")  # Print error for debugging
-                            break
-                        elif "Training completed" in line:
-                            self.progress_bar.set(1.0)
-                            self.step_var.set(f"Step: {total_steps}/{total_steps}")
-                            self.status_var.set("Training completed successfully!")
-                            self.master.update_idletasks()
-                            break
-                        
-                        # Update UI
-                        self.master.update_idletasks()
-                        
-                    except Exception as e:
-                        print(f"Error in progress monitoring: {str(e)}")
-                        continue
-                    
-                    # Check if process has ended
-                    if process.poll() is not None:
-                        error = process.stderr.read()
-                        if error:
-                            print(f"Error output: {error}")  # Print error for debugging
-                            self.status_var.set(f"Error: {error.strip()}")
-                            self.master.update_idletasks()
-                        break
-                
-                # Final status update
-                if process.returncode == 0:
-                    if current_step >= total_steps:
-                        self.progress_bar.set(1.0)
-                        self.step_var.set(f"Step: {total_steps}/{total_steps}")
-                        self.status_var.set("Training completed successfully!")
-                    else:
-                        self.status_var.set("Process ended before completion")
-                else:
-                    self.status_var.set("Training failed. Check console for errors.")
-                self.master.update_idletasks()
+            with open(config_path, 'r') as f:
+                paths_config = yaml.safe_load(f)
             
-            # Start progress monitoring in a separate thread
-            progress_thread = threading.Thread(target=monitor_progress)
-            progress_thread.daemon = True
-            progress_thread.start()
+            # Validate required fields
+            if not self.model_path_var.get():
+                raise ValueError("Please select a model path")
+            if not self.data_folder_var.get():
+                raise ValueError("Please select a data folder")
+            if not self.output_folder_var.get():
+                raise ValueError("Please select an output folder")
+            if not self.name_var.get():
+                raise ValueError("Please enter a name for the training")
             
-            messagebox.showinfo("Success", f"Training started with config: {os.path.basename(config_path)}")
+            # Start training process using current UI state - pass config file directly
+            subprocess.Popen([
+                paths_config['python_path'],
+                paths_config['train_script_path'],
+                self.current_train_file  # Remove --config flag, pass file directly
+            ])
+            
+            self.logger.info(f"Started training process with configuration: {self.current_train_file}")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to start training: {str(e)}")
-            print(f"Exception details: {str(e)}")  # Print exception for debugging
+            error_msg = "Failed to start training: " + str(e)
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
 
     def update_progress(self, current_step, total_steps, status="Training"):
         """Update the progress display"""
@@ -1120,38 +1000,26 @@ class FluxTrainingGUI(ctk.CTkFrame):
             root.destroy()
 
     def load_config_file(self):
-        """Load configuration from a YAML file"""
+        """Load configuration file to prefill UI fields"""
         file_path = filedialog.askopenfilename(
-            defaultextension=".yaml",
+            title="Load Configuration Template",
             filetypes=[("YAML files", "*.yaml"), ("All files", "*.*")]
         )
-        
         if file_path:
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, 'r') as f:
                     config = yaml.safe_load(f)
+                # Load config into UI fields only
                 self.load_config(config)
-                self.current_config_path = file_path
-                self.current_config_label_var.set(f"Loaded: {os.path.basename(file_path)}")
-                messagebox.showinfo("Success", "Configuration loaded successfully!")
+                messagebox.showinfo("Success", "Configuration template loaded successfully!")
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to load configuration: {str(e)}")
+                error_msg = f"Failed to load configuration template: {str(e)}"
+                self.logger.error(error_msg)
+                messagebox.showerror("Error", error_msg)
 
-    def update_config(self):
-        """Update the currently loaded config file"""
-        if not self.current_config_path:
-            messagebox.showwarning("Warning", "No configuration file loaded. Please load a config file first.")
-            return
-            
-        try:
-            config = self.prepare_config()
-            
-            with open(self.current_config_path, 'w', encoding='utf-8') as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            self.current_config_label_var.set(f"Updated: {os.path.basename(self.current_config_path)}")
-            messagebox.showinfo("Success", "Configuration updated successfully!")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to update configuration: {str(e)}")
+    def update_config(self, key, value):
+        """Update the current configuration with new values"""
+        self.current_config[key] = value
 
     def update_dataset_stats(self, folder_path):
         """Update dataset statistics for a given folder path"""
@@ -1277,8 +1145,14 @@ class FluxTrainingGUI(ctk.CTkFrame):
             # Update dataset stats
             self.update_dataset_stats(self.data_folder_var.get())
             
+            # After loading, save as current training config
+            self.current_config = config
+            self.save_current_train()
+            
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load configuration: {str(e)}")
+            error_msg = f"Failed to load configuration: {str(e)}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
 
     def add_theme_toggle(self):
         """Add theme toggle button to the GUI"""
@@ -1579,12 +1453,32 @@ Additional Notes: [any special instructions]"""
     def _on_setting_change(self, *args):
         """Called when any setting changes to save current state"""
         self.save_last_settings()
+        self.save_current_train()  # Also save current training config
         
     def _on_prompt_change(self, event):
         """Called when prompt text changes"""
         if self.prompt_text.edit_modified():
             self.save_last_settings()
             self.prompt_text.edit_modified(False)
+
+    def load_current_train(self):
+        """Load current training configuration if it exists"""
+        try:
+            if os.path.exists(self.current_train_file):
+                with open(self.current_train_file, 'r') as f:
+                    return yaml.safe_load(f)
+        except Exception as e:
+            self.logger.error(f"Failed to load current training config: {str(e)}")
+        return None
+
+    def save_current_train(self):
+        """Save current training configuration"""
+        try:
+            config = self.prepare_config()
+            with open(self.current_train_file, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        except Exception as e:
+            self.logger.error(f"Failed to save current training config: {str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()
