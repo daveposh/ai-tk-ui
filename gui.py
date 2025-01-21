@@ -233,6 +233,24 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.batch_list_var = tk.StringVar(value=[])  # For listbox
         self.batch_status_var = tk.StringVar(value="Ready for batch processing")
 
+        # Add caption management variables
+        self.caption_folder_var = tk.StringVar(value='')
+        self.caption_template_var = tk.StringVar(value='')
+        self.caption_prefix_var = tk.StringVar(value='')
+        self.caption_suffix_var = tk.StringVar(value='')
+        self.overwrite_captions_var = tk.BooleanVar(value=False)
+
+        # Add LLM vision variables
+        self.use_llm_vision_var = tk.BooleanVar(value=False)
+        self.llm_model_var = tk.StringVar(value="gpt-4-vision-preview")  # Default model
+        self.llm_api_key_var = tk.StringVar(value="")
+        self.llm_prompt_var = tk.StringVar(value="Describe this image in detail, focusing on visual elements")
+
+        # Add local LLM options
+        self.use_local_llm_var = tk.BooleanVar(value=False)
+        self.local_api_url_var = tk.StringVar(value="http://localhost:1234/v1")
+        self.local_model_temp_var = tk.StringVar(value="0.7")
+
     def _on_mousewheel(self, event):
         """Handle mousewheel scrolling"""
         if event.num == 5 or event.delta < 0:  # Scroll down
@@ -703,6 +721,149 @@ class FluxTrainingGUI(ctk.CTkFrame):
         status_frame = ctk.CTkFrame(batch_right)
         status_frame.pack(fill='x', padx=5, pady=5)
         ctk.CTkLabel(status_frame, textvariable=self.batch_status_var).pack(anchor='w', padx=5)
+
+        # Add Caption Management tab
+        caption_tab = self.main_notebook.add("Captions")
+        caption_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
+        
+        # Left column for folder selection and options
+        caption_left = ctk.CTkFrame(caption_tab)
+        caption_left.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        
+        # Right column for template and preview
+        caption_right = ctk.CTkFrame(caption_tab)
+        caption_right.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        
+        # Folder Selection
+        folder_frame = ctk.CTkFrame(caption_left)
+        folder_frame.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkLabel(folder_frame, text="Images Folder:").pack(anchor='w', padx=5, pady=2)
+        folder_select = ctk.CTkFrame(folder_frame)
+        folder_select.pack(fill='x', padx=5, pady=2)
+        ctk.CTkEntry(folder_select, textvariable=self.caption_folder_var).pack(side='left', fill='x', expand=True, padx=5)
+        ctk.CTkButton(folder_select, text="Browse", command=self.browse_caption_folder, **button_style).pack(side='right')
+        
+        # Caption Options
+        options_frame = ctk.CTkFrame(caption_left)
+        options_frame.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkLabel(options_frame, text="Caption Options:").pack(anchor='w', padx=5, pady=2)
+        
+        # Prefix
+        prefix_frame = ctk.CTkFrame(options_frame)
+        prefix_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(prefix_frame, text="Prefix:").pack(side='left')
+        ctk.CTkEntry(prefix_frame, textvariable=self.caption_prefix_var).pack(side='left', fill='x', expand=True, padx=5)
+        
+        # Suffix
+        suffix_frame = ctk.CTkFrame(options_frame)
+        suffix_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(suffix_frame, text="Suffix:").pack(side='left')
+        ctk.CTkEntry(suffix_frame, textvariable=self.caption_suffix_var).pack(side='left', fill='x', expand=True, padx=5)
+        
+        # Overwrite option
+        ctk.CTkCheckBox(options_frame, text="Overwrite existing captions", 
+                        variable=self.overwrite_captions_var).pack(anchor='w', padx=5, pady=2)
+        
+        # Template Frame
+        template_frame = ctk.CTkFrame(caption_right)
+        template_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        ctk.CTkLabel(template_frame, text="Caption Template:").pack(anchor='w', padx=5, pady=2)
+        
+        # Template text area
+        self.caption_template = tk.Text(template_frame, height=10, width=40,
+                                      bg=self.themes.get_theme(self.is_dark_mode)['button'],
+                                      fg=self.themes.get_theme(self.is_dark_mode)['text'])
+        self.caption_template.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Template buttons
+        template_buttons = ctk.CTkFrame(template_frame)
+        template_buttons.pack(fill='x', padx=5, pady=5)
+        
+        ctk.CTkButton(template_buttons, text="Load Template", 
+                      command=self.load_caption_template, **button_style).pack(side='left', padx=5)
+        ctk.CTkButton(template_buttons, text="Save Template", 
+                      command=self.save_caption_template, **button_style).pack(side='left', padx=5)
+        ctk.CTkButton(template_buttons, text="Generate Captions", 
+                      command=self.generate_captions, **button_style).pack(side='right', padx=5)
+
+        # Add LLM Vision section to caption_left
+        llm_frame = ctk.CTkFrame(caption_left)
+        llm_frame.pack(fill='x', padx=5, pady=5)
+        
+        # LLM Vision toggle
+        llm_header = ctk.CTkFrame(llm_frame)
+        llm_header.pack(fill='x', padx=5, pady=2)
+        ctk.CTkCheckBox(llm_header, text="Use LLM Vision for Auto-Captioning", 
+                        variable=self.use_llm_vision_var,
+                        command=self.toggle_llm_options).pack(side='left', padx=5)
+        
+        # LLM Options container
+        self.llm_options = ctk.CTkFrame(llm_frame)
+        self.llm_options.pack(fill='x', padx=5, pady=2)
+        
+        # Model selection
+        model_frame = ctk.CTkFrame(self.llm_options)
+        model_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(model_frame, text="Model:").pack(side='left')
+        ctk.CTkOptionMenu(model_frame, 
+                         variable=self.llm_model_var,
+                         values=["gpt-4-vision-preview", "claude-3-opus-20240229"],
+                         **option_menu_style).pack(side='left', padx=5)
+        
+        # API Key
+        api_frame = ctk.CTkFrame(self.llm_options)
+        api_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(api_frame, text="API Key:").pack(side='left')
+        api_entry = ctk.CTkEntry(api_frame, textvariable=self.llm_api_key_var, show="*")
+        api_entry.pack(side='left', fill='x', expand=True, padx=5)
+        
+        # System Prompt
+        prompt_frame = ctk.CTkFrame(self.llm_options)
+        prompt_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(prompt_frame, text="System Prompt:").pack(anchor='w', padx=5)
+        ctk.CTkEntry(prompt_frame, textvariable=self.llm_prompt_var).pack(fill='x', padx=5, pady=2)
+        
+        # Initially disable LLM options
+        self.toggle_llm_options()
+
+        # Add Local LLM section
+        local_llm_frame = ctk.CTkFrame(self.llm_options)
+        local_llm_frame.pack(fill='x', padx=5, pady=2)
+        
+        # Local LLM toggle
+        ctk.CTkCheckBox(local_llm_frame, text="Use Local LLM", 
+                        variable=self.use_local_llm_var,
+                        command=self.toggle_llm_type).pack(anchor='w', padx=5)
+        
+        # Local API settings container
+        self.local_api_frame = ctk.CTkFrame(local_llm_frame)
+        self.local_api_frame.pack(fill='x', padx=5, pady=2)
+        
+        # API URL
+        url_frame = ctk.CTkFrame(self.local_api_frame)
+        url_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(url_frame, text="API URL:").pack(side='left')
+        ctk.CTkEntry(url_frame, textvariable=self.local_api_url_var).pack(side='left', fill='x', expand=True, padx=5)
+        
+        # Temperature
+        temp_frame = ctk.CTkFrame(self.local_api_frame)
+        temp_frame.pack(fill='x', padx=5, pady=2)
+        ctk.CTkLabel(temp_frame, text="Temperature:").pack(side='left')
+        ctk.CTkEntry(temp_frame, textvariable=self.local_model_temp_var, width=80).pack(side='left', padx=5)
+        
+        # Initially update states
+        self.toggle_llm_type()
+
+    def toggle_llm_options(self):
+        """Enable/disable LLM options based on checkbox"""
+        state = "normal" if self.use_llm_vision_var.get() else "disabled"
+        for widget in self.llm_options.winfo_children():
+            for child in widget.winfo_children():
+                if isinstance(child, (ctk.CTkEntry, ctk.CTkOptionMenu)):
+                    child.configure(state=state)
 
     def add_test_prompt(self, template_type):
         """Add a test prompt with the current trigger word"""
@@ -1792,6 +1953,263 @@ Additional Notes: [any special instructions]"""
         for widget in self.batch_right.winfo_children():
             if isinstance(widget, ctk.CTkButton):
                 widget.configure(state="normal")
+
+    def browse_caption_folder(self):
+        """Browse for folder containing images to caption"""
+        folder = filedialog.askdirectory()
+        if folder:
+            self.caption_folder_var.set(folder)
+
+    def load_caption_template(self):
+        """Load a caption template from file"""
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    self.caption_template.delete('1.0', tk.END)
+                    self.caption_template.insert('1.0', f.read())
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load template: {str(e)}")
+
+    def save_caption_template(self):
+        """Save current caption template to file"""
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if file_path:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(self.caption_template.get('1.0', tk.END))
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save template: {str(e)}")
+
+    def generate_captions(self):
+        """Generate caption files for all images in the selected folder"""
+        folder = self.caption_folder_var.get()
+        if not folder or not os.path.exists(folder):
+            messagebox.showerror("Error", "Please select a valid folder")
+            return
+        
+        if self.use_llm_vision_var.get():
+            if not self.llm_api_key_var.get():
+                messagebox.showerror("Error", "Please enter an API key for LLM Vision")
+                return
+        else:
+            template = self.caption_template.get('1.0', tk.END).strip()
+            if not template:
+                messagebox.showerror("Error", "Caption template is empty")
+                return
+        
+        try:
+            # Get all image files
+            image_files = [f for f in os.listdir(folder) 
+                          if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            
+            if not image_files:
+                messagebox.showwarning("Warning", "No image files found in folder")
+                return
+            
+            # Process each image
+            created = 0
+            skipped = 0
+            for img_file in image_files:
+                caption_file = os.path.splitext(img_file)[0] + '.txt'
+                caption_path = os.path.join(folder, caption_file)
+                
+                # Skip if file exists and overwrite is false
+                if os.path.exists(caption_path) and not self.overwrite_captions_var.get():
+                    skipped += 1
+                    continue
+                
+                if self.use_llm_vision_var.get():
+                    # Generate caption using LLM Vision
+                    caption = self.generate_llm_caption(os.path.join(folder, img_file))
+                else:
+                    # Use template-based caption
+                    caption = self.caption_template.get('1.0', tk.END).strip()
+                
+                # Add prefix/suffix
+                if self.caption_prefix_var.get():
+                    caption = self.caption_prefix_var.get() + ", " + caption
+                if self.caption_suffix_var.get():
+                    caption = caption + ", " + self.caption_suffix_var.get()
+                
+                # Save caption file
+                with open(caption_path, 'w', encoding='utf-8') as f:
+                    f.write(caption)
+                created += 1
+            
+            status = f"Created {created} caption files"
+            if skipped > 0:
+                status += f", skipped {skipped} existing files"
+            messagebox.showinfo("Success", status)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate captions: {str(e)}")
+
+    def generate_llm_caption(self, image_path):
+        """Generate caption for an image using LLM Vision API"""
+        try:
+            import base64
+            import requests
+            import json
+            
+            # Read and encode image
+            with open(image_path, "rb") as image_file:
+                encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+            
+            if self.use_local_llm_var.get():
+                # Use local LLM API (LMStudio compatible endpoint)
+                headers = {
+                    "Content-Type": "application/json"
+                }
+                
+                payload = {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": self.llm_prompt_var.get()
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{encoded_image}"
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    "temperature": float(self.local_model_temp_var.get()),
+                    "max_tokens": 500
+                }
+                
+                response = requests.post(
+                    f"{self.local_api_url_var.get()}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                )
+                
+                result = response.json()
+                caption = result['choices'][0]['message']['content']
+                
+            else:
+                # Existing cloud API code...
+                if "gpt-4" in self.llm_model_var.get():
+                    # OpenAI GPT-4 Vision API code...
+                    headers = {
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.llm_api_key_var.get()}"
+                    }
+                    
+                    payload = {
+                        "model": self.llm_model_var.get(),
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": self.llm_prompt_var.get()
+                                    },
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:image/jpeg;base64,{encoded_image}"
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                        "max_tokens": 500
+                    }
+                    
+                    response = requests.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers=headers,
+                        json=payload
+                    )
+                    
+                    result = response.json()
+                    caption = result['choices'][0]['message']['content']
+                
+                elif "claude" in self.llm_model_var.get():
+                    # Anthropic Claude API code...
+                    headers = {
+                        "Content-Type": "application/json",
+                        "x-api-key": self.llm_api_key_var.get(),
+                        "anthropic-version": "2023-06-01"
+                    }
+                    
+                    payload = {
+                        "model": self.llm_model_var.get(),
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": self.llm_prompt_var.get()
+                                    },
+                                    {
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": "image/jpeg",
+                                            "data": encoded_image
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                        "max_tokens": 500
+                    }
+                    
+                    response = requests.post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers=headers,
+                        json=payload
+                    )
+                    
+                    result = response.json()
+                    caption = result['content'][0]['text']
+                
+            return caption.strip()
+            
+        except Exception as e:
+            self.logger.error(f"LLM Vision API error: {str(e)}")
+            raise Exception(f"Failed to generate caption using LLM Vision: {str(e)}")
+
+    def toggle_llm_type(self):
+        """Toggle between cloud and local LLM options"""
+        if self.use_llm_vision_var.get():
+            cloud_state = "disabled" if self.use_local_llm_var.get() else "normal"
+            local_state = "normal" if self.use_local_llm_var.get() else "disabled"
+            
+            # Update cloud options
+            for widget in self.llm_options.winfo_children():
+                if widget != self.local_api_frame:
+                    for child in widget.winfo_children():
+                        if isinstance(child, (ctk.CTkEntry, ctk.CTkOptionMenu)):
+                            child.configure(state=cloud_state)
+            
+            # Update local options
+            for widget in self.local_api_frame.winfo_children():
+                for child in widget.winfo_children():
+                    if isinstance(child, ctk.CTkEntry):
+                        child.configure(state=local_state)
+        else:
+            # Disable all if LLM vision is off
+            for widget in self.llm_options.winfo_children():
+                for child in widget.winfo_children():
+                    if isinstance(child, (ctk.CTkEntry, ctk.CTkOptionMenu)):
+                        child.configure(state="disabled")
 
 if __name__ == "__main__":
     root = tk.Tk()
