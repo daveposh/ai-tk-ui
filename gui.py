@@ -369,7 +369,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Dataset options
         dataset_options_frame = ctk.CTkFrame(dataset_frame)
         dataset_options_frame.pack(fill='x', padx=5, pady=2)
-        ctk.CTkCheckBox(dataset_options_frame, text="Convert UTF-8", variable=self.convert_utf8_var).pack(side='left', padx=5)
+        ctk.CTkCheckBox(dataset_options_frame, text="Convert Captions to UTF-8", variable=self.convert_utf8_var).pack(side='left', padx=5)
         
         # Add resolution settings to dataset frame
         resolution_frame = ctk.CTkFrame(dataset_frame)
@@ -653,100 +653,111 @@ class FluxTrainingGUI(ctk.CTkFrame):
         example = self.default_prompts[style]["Person (Woman)"].replace("<trigger>", trigger_word)
         self.prompt_text.insert('1.0', example)
 
+    def load_default_config(self):
+        """Load master template configuration from train_lora_flux_24gb.yaml"""
+        try:
+            default_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
+                                             'ai-toolkit', 'config', 'examples', 
+                                             'train_lora_flux_24gb.yaml')
+            if os.path.exists(default_config_path):
+                with open(default_config_path, 'r') as f:
+                    return yaml.safe_load(f)
+            else:
+                self.logger.error(f"Master template not found at: {default_config_path}")
+                raise FileNotFoundError(f"Required master template not found: {default_config_path}")
+        except Exception as e:
+            self.logger.error(f"Error loading master template: {str(e)}")
+            raise
+
     def prepare_config(self):
-        """Prepare the configuration dictionary"""
-        # Get the actual learning rate value from the preset
+        """Prepare the configuration dictionary using master template as base"""
+        # Load master template configuration
+        config = self.load_default_config()
+        process_config = config['config']['process'][0]
+        
+        # Only update values that are explicitly set in the GUI
+        # Everything else will keep the master template values
+        
+        # Update basic config if set
+        if self.name_var.get():
+            config['config']['name'] = self.name_var.get()
+        if self.trigger_word_var.get():
+            config['config']['trigger_word'] = self.trigger_word_var.get()
+        
+        # Update training folder if set
+        if self.output_folder_var.get():
+            process_config['training_folder'] = self.output_folder_var.get()
+        
+        # Update network settings that are configurable in GUI
+        process_config['network'].update({
+            'type': self.network_type_var.get(),
+            'linear': int(self.linear_var.get()),
+            'linear_alpha': int(self.linear_alpha_var.get())
+        })
+        
+        # Update save settings that are configurable in GUI
+        process_config['save'].update({
+            'dtype': self.save_dtype_var.get(),
+            'save_every': int(self.save_every_var.get()),
+            'max_step_saves_to_keep': int(self.max_saves_var.get())
+        })
+        
+        # Update dataset settings if path is set
+        if self.data_folder_var.get():
+            # Get selected resolutions
+            selected_resolutions = []
+            for res, data in self.resolution_vars.items():
+                if data['var'].get():
+                    size = int(res.split('x')[0])
+                    selected_resolutions.append(size)
+            
+            if not selected_resolutions:
+                selected_resolutions = [512]
+            
+            process_config['datasets'][0].update({
+                'folder_path': self.data_folder_var.get(),
+                'resolution': selected_resolutions
+            })
+        
+        # Update train settings that are configurable in GUI
         selected_lr = self.lr_var.get()
         lr_value = self.lr_presets[selected_lr]['value'] if selected_lr in self.lr_presets else selected_lr
         
-        # Get selected resolutions
-        selected_resolutions = []
-        for res, data in self.resolution_vars.items():
-            if data['var'].get():
-                size = int(res.split('x')[0])
-                selected_resolutions.append(size)  # Just append the size, not a list
+        process_config['train'].update({
+            'batch_size': int(self.batch_size_var.get()),
+            'steps': int(self.steps_var.get()),
+            'gradient_accumulation_steps': int(self.grad_accum_var.get()),
+            'train_unet': self.train_unet_var.get(),
+            'train_text_encoder': self.train_text_encoder_var.get(),
+            'gradient_checkpointing': self.grad_checkpointing_var.get(),
+            'noise_scheduler': self.noise_scheduler_var.get(),
+            'optimizer': self.optimizer_var.get(),
+            'lr': lr_value
+        })
         
-        if not selected_resolutions:  # If no resolution selected, default to 512
-            selected_resolutions = [512]
+        # Update model settings if path is set
+        if self.model_path_var.get():
+            process_config['model'].update({
+                'name_or_path': self.model_path_var.get(),
+                'is_flux': self.is_flux_var.get(),
+                'quantize': self.quantize_var.get()
+            })
         
-        # Prepare sample config
-        sample_config = None
+        # Update sample settings if enabled
         if self.enable_sampling_var.get():
-            # Split prompts by blank lines and remove empty strings
             prompts = [p.strip() for p in self.prompt_text.get('1.0', tk.END).split('\n\n')]
-            prompts = [p for p in prompts if p]  # Remove empty prompts
+            prompts = [p for p in prompts if p]
             
-            sample_config = {
-                'sampler': 'flowmatch',  # Must match train.noise_scheduler
+            # Only update sampling values that are configurable in GUI
+            process_config['sample'].update({
                 'sample_every': int(self.sample_every_var.get()),
-                'width': 1024,  # Default size
-                'height': 1024,  # Default size
                 'prompts': prompts,
-                'neg': '',  # Not used for flux
                 'seed': int(self.seed_var.get()),
                 'walk_seed': self.use_fixed_seed_var.get(),
                 'guidance_scale': float(self.cfg_scale_var.get()),
                 'sample_steps': int(self.sampling_steps_var.get())
-            }
+            })
         
-        config = {
-            'job': 'extension',
-            'config': {
-                'name': self.name_var.get(),
-                'trigger_word': self.trigger_word_var.get(),
-                'process': [{
-                    'type': 'sd_trainer',
-                    'training_folder': self.output_folder_var.get(),
-                    'device': 'cuda:0',
-                    'network': {
-                        'type': self.network_type_var.get(),
-                        'linear': int(self.linear_var.get()),
-                        'linear_alpha': int(self.linear_alpha_var.get())
-                    },
-                    'save': {
-                        'dtype': self.save_dtype_var.get(),
-                        'save_every': int(self.save_every_var.get()),
-                        'max_step_saves_to_keep': int(self.max_saves_var.get()),
-                        'push_to_hub': False
-                    },
-                    'datasets': [{
-                        'folder_path': self.data_folder_var.get(),
-                        'caption_ext': '.txt',
-                        'caption_dropout_rate': 0.05,
-                        'shuffle_tokens': False,
-                        'cache_latents_to_disk': True,
-                        'resolution': selected_resolutions[0],  # Use first selected resolution
-                        'keep_tokens': 1
-                    }],
-                    'train': {
-                        'batch_size': int(self.batch_size_var.get()),
-                        'steps': int(self.steps_var.get()),
-                        'gradient_accumulation_steps': int(self.grad_accum_var.get()),
-                        'train_unet': self.train_unet_var.get(),
-                        'train_text_encoder': self.train_text_encoder_var.get(),
-                        'gradient_checkpointing': self.grad_checkpointing_var.get(),
-                        'noise_scheduler': self.noise_scheduler_var.get(),
-                        'optimizer': self.optimizer_var.get(),
-                        'lr': lr_value,
-                        'ema_config': {
-                            'use_ema': True,
-                            'ema_decay': 0.99
-                        },
-                        'dtype': 'bf16'
-                    },
-                    'model': {
-                        'name_or_path': self.model_path_var.get(),
-                        'is_flux': self.is_flux_var.get(),
-                        'quantize': self.quantize_var.get()
-                    },
-                    'sample': sample_config
-                }]
-            },
-            'meta': {
-                'name': '[name]',
-                'version': '1.0'
-            }
-        }
         return config
 
     def save_config(self):
@@ -793,43 +804,44 @@ class FluxTrainingGUI(ctk.CTkFrame):
             messagebox.showerror("Error", error_msg)
 
     def convert_captions_to_utf8(self, folder_path):
-        """Convert caption files to UTF-8 encoding"""
+        """Convert all caption files in the folder to UTF-8"""
         caption_files = []
         for file in os.listdir(folder_path):
-            if file.lower().endswith(('.txt', '.caption')):
+            if file.lower().endswith('.txt'):
                 caption_files.append(os.path.join(folder_path, file))
         
-        converted = 0
+        converted_count = 0
         for file_path in caption_files:
             try:
-                # Detect the file encoding
-                with open(file_path, 'rb') as f:
-                    raw_data = f.read()
-                    result = chardet.detect(raw_data)
+                # Detect the encoding
+                with open(file_path, 'rb') as file:
+                    raw = file.read()
+                    result = chardet.detect(raw)
                     encoding = result['encoding']
                 
                 # Read with detected encoding and write as UTF-8
-                with open(file_path, 'r', encoding=encoding) as f:
-                    content = f.read()
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                converted += 1
+                if encoding and encoding.lower() != 'utf-8':
+                    with open(file_path, 'r', encoding=encoding) as file:
+                        content = file.read()
+                    with open(file_path, 'w', encoding='utf-8') as file:
+                        file.write(content)
+                    converted_count += 1
+                
             except Exception as e:
-                print(f"Error converting {file_path}: {str(e)}")
+                self.logger.error(f"Failed to convert {file_path}: {str(e)}")
         
-        return converted, len(caption_files)
+        return converted_count
 
     def start_training(self):
-        """Start training with current UI state"""
+        """Start training with current configuration"""
         try:
-            # Get current UI state
+            # Save current UI state to current_train.yaml
             config = self.prepare_config()
             
-            # Save current state to current_train.yaml
             with open(self.current_train_file, 'w') as f:
                 yaml.dump(config, f, default_flow_style=False, sort_keys=False)
             
-            # Load paths from config.yaml (created by start.bat)
+            # Load paths from config.yaml
             config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
             
             if not os.path.exists(config_path):
@@ -848,14 +860,21 @@ class FluxTrainingGUI(ctk.CTkFrame):
             if not self.name_var.get():
                 raise ValueError("Please enter a name for the training")
             
-            # Start training process using current UI state - pass config file directly
+            # Convert captions to UTF-8 if option is enabled
+            self.status_var.set("Converting captions to UTF-8...")
+            data_folder = self.data_folder_var.get()
+            converted = self.convert_captions_to_utf8(data_folder)
+            if converted > 0:
+                self.logger.info(f"Converted {converted} caption files to UTF-8")
+            
+            # Start training process with default console output
             subprocess.Popen([
                 paths_config['python_path'],
                 paths_config['train_script_path'],
-                self.current_train_file  # Remove --config flag, pass file directly
+                self.current_train_file
             ])
             
-            self.logger.info(f"Started training process with configuration: {self.current_train_file}")
+            self.status_var.set("Training started... Check console for progress")
             
         except Exception as e:
             error_msg = "Failed to start training: " + str(e)
@@ -1172,41 +1191,78 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Get new theme colors
         theme = self.themes.get_theme(self.is_dark_mode)
         
-        # Update root window background color
+        # Update root window and title bar
         if isinstance(self.master, tk.Tk):
             self.master.configure(bg=theme['bg'])
+            # Update title bar
+            title_bar = next((w for w in self.master.winfo_children() 
+                             if isinstance(w, ctk.CTkFrame) and w.winfo_height() == 30), None)
+            if title_bar:
+                title_bar.configure(fg_color=theme['frame'])
+                # Update title bar children (close button and title)
+                for child in title_bar.winfo_children():
+                    if isinstance(child, ctk.CTkButton):  # Close button
+                        child.configure(
+                            fg_color="transparent",
+                            hover_color="#FF4444",
+                            text_color=theme['text']
+                        )
+                    elif isinstance(child, ctk.CTkLabel):  # Title label
+                        child.configure(text_color=theme['text'])
         else:
             self.master.configure(fg_color=theme['bg'])
         
         # Update main frame color
         self.configure(fg_color=theme['bg'])
         
-        # Update notebook colors
+        # Update notebook and its tabs
         self.main_notebook.configure(fg_color=theme['frame'])
-        for tab_name in ["Training", "Sample"]:
-            tab = getattr(self.main_notebook._segmented_button, tab_name)
-            if tab:
-                tab.configure(fg_color=theme['frame'])
+        self.main_notebook._segmented_button.configure(
+            fg_color=theme['frame'],
+            selected_color=theme['highlight'],
+            unselected_color=theme['button']
+        )
         
-        # Update progress frame color
+        # Update all tab frames
+        for tab in ["Training", "Sample"]:
+            tab_frame = self.main_notebook.tab(tab)
+            if tab_frame:
+                tab_frame.configure(fg_color=theme['frame'])
+                # Update all child frames in the tab
+                for child in tab_frame.winfo_children():
+                    if isinstance(child, (ctk.CTkFrame, tk.Frame)):
+                        child.configure(fg_color=theme['frame'])
+                        # Update nested frames
+                        for nested in child.winfo_children():
+                            if isinstance(nested, (ctk.CTkFrame, tk.Frame)):
+                                nested.configure(fg_color=theme['frame'])
+        
+        # Update text widget colors
+        if hasattr(self, 'prompt_text'):
+            self.prompt_text.configure(
+                bg=theme['bg'],
+                fg=theme['text'],
+                insertbackground=theme['text']
+            )
+        
+        # Update progress frame and bar
         for widget in self.winfo_children():
             if isinstance(widget, ctk.CTkFrame):
                 widget.configure(fg_color=theme['frame'])
-        
-        # Apply theme to all widgets
-        self.themes.apply_theme(self.master, self.is_dark_mode)
-        
-        # Update theme button text
-        self.theme_button.configure(text="🌙" if self.is_dark_mode else "☀️")
-        
-        # Save theme preference
-        self.save_theme_preference()
+                # Update progress bar if it exists
+                for child in widget.winfo_children():
+                    if isinstance(child, ctk.CTkProgressBar):
+                        child.configure(
+                            fg_color=theme['button'],
+                            progress_color=theme['highlight']
+                        )
         
         # Update button styles
         button_style = {
             'fg_color': theme['button'],
             'hover_color': theme['highlight'],
-            'text_color': theme['text']
+            'text_color': theme['text'],
+            'border_color': theme['highlight']
         }
         
         option_menu_style = {
@@ -1218,7 +1274,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
             'text_color': theme['text']
         }
         
-        # Update all buttons and option menus recursively
+        # Update all widgets recursively with proper styling
         def update_widget_styles(widget):
             if isinstance(widget, ctk.CTkButton):
                 widget.configure(**button_style)
@@ -1226,15 +1282,45 @@ class FluxTrainingGUI(ctk.CTkFrame):
                 widget.configure(**option_menu_style)
             elif isinstance(widget, ctk.CTkFrame):
                 widget.configure(fg_color=theme['frame'])
-            elif isinstance(widget, tk.Tk):
-                widget.configure(bg=theme['bg'])
-            
+            elif isinstance(widget, ctk.CTkEntry):
+                widget.configure(
+                    fg_color=theme['button'],
+                    text_color=theme['text'],
+                    border_color=theme['highlight']
+                )
+            elif isinstance(widget, ctk.CTkCheckBox):
+                widget.configure(
+                    fg_color=theme['button'],
+                    text_color=theme['text'],
+                    hover_color=theme['highlight']
+                )
+            elif isinstance(widget, ctk.CTkRadioButton):
+                widget.configure(
+                    fg_color=theme['button'],
+                    text_color=theme['text'],
+                    hover_color=theme['highlight']
+                )
+            elif isinstance(widget, ctk.CTkLabel):
+                widget.configure(text_color=theme['text'])
+            elif isinstance(widget, tk.Text):
+                widget.configure(
+                    bg=theme['bg'],
+                    fg=theme['text'],
+                    insertbackground=theme['text']
+                )
+        
             # Recursively update child widgets
             for child in widget.winfo_children():
                 update_widget_styles(child)
         
         # Apply styles to all widgets
         update_widget_styles(self)
+        
+        # Update theme button text
+        self.theme_button.configure(text="🌙" if self.is_dark_mode else "☀️")
+        
+        # Save theme preference
+        self.save_theme_preference()
 
     def load_theme_preference(self):
         """Load theme preference from settings file"""
@@ -1279,9 +1365,14 @@ class FluxTrainingGUI(ctk.CTkFrame):
         if image_count <= 0:
             return 5000  # Default value
         
-        # Get current learning rate value
+        # Get current learning rate value and convert to float
         selected_lr = self.lr_var.get()
-        lr_value = float(self.lr_presets[selected_lr]['value'] if selected_lr in self.lr_presets else selected_lr)
+        try:
+            lr_value = float(self.lr_presets[selected_lr]['value'] if selected_lr in self.lr_presets else selected_lr)
+        except (ValueError, TypeError):
+            # If conversion fails, use default value
+            self.logger.warning(f"Invalid learning rate value: {selected_lr}, using default")
+            lr_value = 1e-4
         
         # Define recommended repeats based on learning rate
         if lr_value >= 2e-4:  # Fast learning
@@ -1296,7 +1387,11 @@ class FluxTrainingGUI(ctk.CTkFrame):
             repeats = 300
         
         # Calculate total steps based on images and batch size
-        batch_size = int(self.batch_size_var.get())
+        try:
+            batch_size = int(self.batch_size_var.get())
+        except ValueError:
+            batch_size = 1  # Default if invalid
+        
         steps_per_epoch = (image_count + batch_size - 1) // batch_size
         total_steps = steps_per_epoch * repeats
         
@@ -1408,15 +1503,6 @@ Additional Notes: [any special instructions]"""
         
         return templates.get(template_type, "Template not found")
 
-    def update_steps_on_lr_change(self):
-        """Update steps when learning rate changes and auto steps is enabled"""
-        if self.auto_steps_var.get():
-            folder_path = self.data_folder_var.get()
-            if folder_path and os.path.exists(folder_path):
-                image_count, _ = self.count_dataset_files(folder_path)
-                suggested_steps = self.calculate_suggested_steps(image_count)
-                self.steps_var.set(str(suggested_steps))
-
     def setup_auto_save_traces(self):
         """Setup traces on all variables to auto-save settings when they change"""
         # List of all StringVar variables
@@ -1461,15 +1547,14 @@ Additional Notes: [any special instructions]"""
             self.save_last_settings()
             self.prompt_text.edit_modified(False)
 
-    def load_current_train(self):
-        """Load current training configuration if it exists"""
-        try:
-            if os.path.exists(self.current_train_file):
-                with open(self.current_train_file, 'r') as f:
-                    return yaml.safe_load(f)
-        except Exception as e:
-            self.logger.error(f"Failed to load current training config: {str(e)}")
-        return None
+    def update_steps_on_lr_change(self):
+        """Update steps when learning rate changes and auto steps is enabled"""
+        if self.auto_steps_var.get():
+            folder_path = self.data_folder_var.get()
+            if folder_path and os.path.exists(folder_path):
+                image_count, _ = self.count_dataset_files(folder_path)
+                suggested_steps = self.calculate_suggested_steps(image_count)
+                self.steps_var.set(str(suggested_steps))
 
     def save_current_train(self):
         """Save current training configuration"""
@@ -1479,6 +1564,16 @@ Additional Notes: [any special instructions]"""
                 yaml.dump(config, f, default_flow_style=False, sort_keys=False)
         except Exception as e:
             self.logger.error(f"Failed to save current training config: {str(e)}")
+
+    def load_current_train(self):
+        """Load current training configuration if it exists"""
+        try:
+            if os.path.exists(self.current_train_file):
+                with open(self.current_train_file, 'r') as f:
+                    return yaml.safe_load(f)
+        except Exception as e:
+            self.logger.error(f"Failed to load current training config: {str(e)}")
+        return None
 
 if __name__ == "__main__":
     root = tk.Tk()
@@ -1507,17 +1602,21 @@ if __name__ == "__main__":
             root.geometry(f"+{x}+{y}")
             root.x = event.x_root
             root.y = event.y_root
-
-    # Bind dragging to title bar area only
+    
+    # Create title bar with theme-aware colors
     title_bar = ctk.CTkFrame(root, height=30)
     title_bar.pack(fill='x', side='top')
-    title_bar.configure(fg_color='#1e1e1e')
+    title_bar.configure(fg_color='#1e1e1e')  # Will be updated by theme toggle
     
-    title_bar.bind("<ButtonPress-1>", start_move)
-    title_bar.bind("<ButtonRelease-1>", stop_move)
-    title_bar.bind("<B1-Motion>", do_move)
+    # Add title with theme-aware colors
+    title_label = ctk.CTkLabel(
+        title_bar, 
+        text="Flux Training GUI",
+        text_color="white"  # Will be updated by theme toggle
+    )
+    title_label.pack(side='left', padx=10)
     
-    # Add a close button in the top-right corner
+    # Add close button with theme-aware colors
     close_button = ctk.CTkButton(
         title_bar,
         text="×",
@@ -1525,13 +1624,15 @@ if __name__ == "__main__":
         height=30,
         command=root.destroy,
         fg_color="transparent",
-        hover_color="#FF4444"
+        hover_color="#FF4444",
+        text_color="white"  # Will be updated by theme toggle
     )
     close_button.pack(side='right', padx=5)
     
-    # Add window title
-    title_label = ctk.CTkLabel(title_bar, text="Flux Training GUI")
-    title_label.pack(side='left', padx=10)
+    # Bind dragging to title bar
+    title_bar.bind("<ButtonPress-1>", start_move)
+    title_bar.bind("<ButtonRelease-1>", stop_move)
+    title_bar.bind("<B1-Motion>", do_move)
     
     # Center the window but let it size to content
     screen_width = root.winfo_screenwidth()
@@ -1546,4 +1647,4 @@ if __name__ == "__main__":
     root.update_idletasks()
     root.geometry('')
     
-    root.mainloop() 
+    root.mainloop()
