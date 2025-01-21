@@ -115,6 +115,9 @@ class FluxTrainingGUI(ctk.CTkFrame):
 
         self.training_config_path = None
         self.current_config = {}  # Store the current configuration state
+        
+        # Add process tracking
+        self.training_process = None
 
     def setup_logging(self):
         """Setup logging configuration"""
@@ -224,6 +227,11 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Add progress tracking variables
         self.step_var = tk.StringVar(value="Step: 0/0")
         self.status_var = tk.StringVar(value="Ready")
+
+        # Add batch processing variables
+        self.batch_configs = []  # List to store batch configurations
+        self.batch_list_var = tk.StringVar(value=[])  # For listbox
+        self.batch_status_var = tk.StringVar(value="Ready for batch processing")
 
     def _on_mousewheel(self, event):
         """Handle mousewheel scrolling"""
@@ -472,9 +480,21 @@ class FluxTrainingGUI(ctk.CTkFrame):
             'corner_radius': 6
         }
         
-        ctk.CTkButton(button_frame, text="Load Config", command=self.load_config_file, **button_style).pack(side='left', padx=5)
-        ctk.CTkButton(button_frame, text="Save Config", command=self.save_config, **button_style).pack(side='left', padx=5)
-        ctk.CTkButton(button_frame, text="Start Training", command=self.start_training, **button_style).pack(side='right', padx=5)
+        # Left side buttons
+        left_buttons = ctk.CTkFrame(button_frame)
+        left_buttons.pack(side='left')
+        ctk.CTkButton(left_buttons, text="Load Config", command=self.load_config_file, **button_style).pack(side='left', padx=5)
+        ctk.CTkButton(left_buttons, text="Save Config", command=self.save_config, **button_style).pack(side='left', padx=5)
+        
+        # Right side buttons
+        right_buttons = ctk.CTkFrame(button_frame)
+        right_buttons.pack(side='right')
+        self.start_button = ctk.CTkButton(right_buttons, text="Start Training", command=self.start_training, **button_style)
+        self.start_button.pack(side='left', padx=5)
+        
+        self.stop_button = ctk.CTkButton(right_buttons, text="Stop Training", command=self.stop_training, 
+                                        fg_color="#FF4444", hover_color="#CC3333", state="disabled")
+        self.stop_button.pack(side='left', padx=5)
         
         # Progress Frame
         progress_frame = ctk.CTkFrame(self)
@@ -626,6 +646,63 @@ class FluxTrainingGUI(ctk.CTkFrame):
                 "Thing": "<trigger>, object, (high quality), (best quality), (realistic), (photorealistic), (detailed)"
             }
         }
+
+        # Add Batch tab
+        batch_tab = self.main_notebook.add("Batch")
+        batch_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
+        
+        # Left column for batch list
+        batch_left = ctk.CTkFrame(batch_tab)
+        batch_left.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        
+        # Right column for controls
+        batch_right = ctk.CTkFrame(batch_tab)
+        batch_right.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        
+        # Batch List
+        list_frame = ctk.CTkFrame(batch_left)
+        list_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        ctk.CTkLabel(list_frame, text="Batch Queue:").pack(anchor='w', padx=5, pady=2)
+        
+        # Create listbox for batch items
+        self.batch_listbox = tk.Listbox(list_frame, selectmode=tk.SINGLE, 
+                                       bg=self.themes.get_theme(self.is_dark_mode)['button'],
+                                       fg=self.themes.get_theme(self.is_dark_mode)['text'])
+        self.batch_listbox.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Batch Controls
+        control_frame = ctk.CTkFrame(batch_right)
+        control_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Add current config to batch
+        ctk.CTkButton(control_frame, 
+                      text="Add Current Config", 
+                      command=self.add_to_batch,
+                      **button_style).pack(fill='x', padx=5, pady=2)
+        
+        # Remove selected from batch
+        ctk.CTkButton(control_frame, 
+                      text="Remove Selected", 
+                      command=self.remove_from_batch,
+                      **button_style).pack(fill='x', padx=5, pady=2)
+        
+        # Clear batch
+        ctk.CTkButton(control_frame, 
+                      text="Clear Batch", 
+                      command=self.clear_batch,
+                      **button_style).pack(fill='x', padx=5, pady=2)
+        
+        # Start batch processing
+        ctk.CTkButton(control_frame, 
+                      text="Start Batch Processing", 
+                      command=self.start_batch_processing,
+                      **button_style).pack(fill='x', padx=5, pady=2)
+        
+        # Batch status
+        status_frame = ctk.CTkFrame(batch_right)
+        status_frame.pack(fill='x', padx=5, pady=5)
+        ctk.CTkLabel(status_frame, textvariable=self.batch_status_var).pack(anchor='w', padx=5)
 
     def add_test_prompt(self, template_type):
         """Add a test prompt with the current trigger word"""
@@ -868,16 +945,48 @@ class FluxTrainingGUI(ctk.CTkFrame):
                 self.logger.info(f"Converted {converted} caption files to UTF-8")
             
             # Start training process with default console output
-            subprocess.Popen([
+            self.training_process = subprocess.Popen([
                 paths_config['python_path'],
                 paths_config['train_script_path'],
                 self.current_train_file
             ])
             
+            # Update button states
+            self.start_button.configure(state="disabled")
+            self.stop_button.configure(state="normal")
+            
             self.status_var.set("Training started... Check console for progress")
             
         except Exception as e:
             error_msg = "Failed to start training: " + str(e)
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+
+    def stop_training(self):
+        """Stop the training process"""
+        try:
+            if self.training_process:
+                # Try to terminate gracefully first
+                self.training_process.terminate()
+                
+                # Give it a moment to terminate
+                try:
+                    self.training_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # If it doesn't terminate, force kill
+                    self.training_process.kill()
+                
+                self.training_process = None
+                
+                # Update button states
+                self.start_button.configure(state="normal")
+                self.stop_button.configure(state="disabled")
+                
+                self.status_var.set("Training stopped by user")
+                self.logger.info("Training process stopped by user")
+                
+        except Exception as e:
+            error_msg = f"Failed to stop training: {str(e)}"
             self.logger.error(error_msg)
             messagebox.showerror("Error", error_msg)
 
@@ -1012,11 +1121,19 @@ class FluxTrainingGUI(ctk.CTkFrame):
 
     def on_closing(self):
         """Handle window closing"""
-        self.save_last_settings()
-        # Find root window and destroy it
-        root = self._find_root_window(self.master)
-        if root:
-            root.destroy()
+        try:
+            # Stop training if it's running
+            if self.training_process:
+                self.stop_training()
+            
+            # Save settings
+            self.save_last_settings()
+            
+            # Destroy window
+            if isinstance(self.master, tk.Tk):
+                self.master.destroy()
+        except Exception as e:
+            self.logger.error(f"Error during shutdown: {str(e)}")
 
     def load_config_file(self):
         """Load configuration file to prefill UI fields"""
@@ -1209,8 +1326,6 @@ class FluxTrainingGUI(ctk.CTkFrame):
                         )
                     elif isinstance(child, ctk.CTkLabel):  # Title label
                         child.configure(text_color=theme['text'])
-        else:
-            self.master.configure(fg_color=theme['bg'])
         
         # Update main frame color
         self.configure(fg_color=theme['bg'])
@@ -1574,6 +1689,109 @@ Additional Notes: [any special instructions]"""
         except Exception as e:
             self.logger.error(f"Failed to load current training config: {str(e)}")
         return None
+
+    def add_to_batch(self):
+        """Add current configuration to batch queue"""
+        try:
+            config = self.prepare_config()
+            name = config['config']['name']
+            
+            # Add to batch list
+            self.batch_configs.append(config)
+            self.batch_listbox.insert(tk.END, f"Training: {name}")
+            
+            self.batch_status_var.set(f"Added {name} to batch queue")
+            self.logger.info(f"Added configuration '{name}' to batch queue")
+            
+        except Exception as e:
+            error_msg = f"Failed to add to batch: {str(e)}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+
+    def remove_from_batch(self):
+        """Remove selected configuration from batch queue"""
+        try:
+            selection = self.batch_listbox.curselection()
+            if selection:
+                index = selection[0]
+                name = self.batch_configs[index]['config']['name']
+                
+                self.batch_listbox.delete(index)
+                self.batch_configs.pop(index)
+                
+                self.batch_status_var.set(f"Removed {name} from batch queue")
+                self.logger.info(f"Removed configuration '{name}' from batch queue")
+                
+        except Exception as e:
+            error_msg = f"Failed to remove from batch: {str(e)}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+
+    def clear_batch(self):
+        """Clear all configurations from batch queue"""
+        try:
+            self.batch_configs.clear()
+            self.batch_listbox.delete(0, tk.END)
+            self.batch_status_var.set("Batch queue cleared")
+            self.logger.info("Batch queue cleared")
+            
+        except Exception as e:
+            error_msg = f"Failed to clear batch: {str(e)}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+
+    def start_batch_processing(self):
+        """Start processing all configurations in the batch queue"""
+        if not self.batch_configs:
+            messagebox.showwarning("Warning", "Batch queue is empty")
+            return
+        
+        try:
+            # Disable batch controls during processing
+            self.disable_batch_controls()
+            
+            for i, config in enumerate(self.batch_configs):
+                name = config['config']['name']
+                self.batch_status_var.set(f"Processing {name} ({i+1}/{len(self.batch_configs)})")
+                
+                # Save current config to temp file
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+                    config_path = f.name
+                
+                # Start training process
+                process = subprocess.Popen([
+                    self.python_path,
+                    self.train_script_path,
+                    config_path
+                ])
+                
+                # Wait for process to complete
+                process.wait()
+                
+                # Clean up temp file
+                os.unlink(config_path)
+            
+            self.batch_status_var.set("Batch processing completed")
+            self.enable_batch_controls()
+            
+        except Exception as e:
+            error_msg = f"Batch processing failed: {str(e)}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+            self.enable_batch_controls()
+
+    def disable_batch_controls(self):
+        """Disable batch control buttons during processing"""
+        for widget in self.batch_right.winfo_children():
+            if isinstance(widget, ctk.CTkButton):
+                widget.configure(state="disabled")
+
+    def enable_batch_controls(self):
+        """Enable batch control buttons after processing"""
+        for widget in self.batch_right.winfo_children():
+            if isinstance(widget, ctk.CTkButton):
+                widget.configure(state="normal")
 
 if __name__ == "__main__":
     root = tk.Tk()
