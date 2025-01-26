@@ -251,6 +251,10 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.local_api_url_var = tk.StringVar(value="http://localhost:1234/v1")
         self.local_model_temp_var = tk.StringVar(value="0.7")
 
+        # Add variable for tracking current tab
+        self.current_tab = None
+        self.train_button = None  # Will store reference to train button
+
     def _on_mousewheel(self, event):
         """Handle mousewheel scrolling"""
         if event.num == 5 or event.delta < 0:  # Scroll down
@@ -304,8 +308,22 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.main_notebook.pack(fill="both", expand=True, padx=10, pady=10)
         self.main_notebook.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
         
-        # Training tab
+        # Add tabs first
         training_tab = self.main_notebook.add("Training")
+        sample_tab = self.main_notebook.add("Sample")
+        batch_tab = self.main_notebook.add("Batch")
+        caption_tab = self.main_notebook.add("Captions")
+        
+        # Set tab change callback after adding tabs
+        self.main_notebook.configure(command=self.on_tab_change)
+        
+        # Configure tab colors
+        training_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
+        sample_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
+        batch_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
+        caption_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
+        
+        # Training tab
         training_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
         
         # Left column in Training tab
@@ -507,8 +525,11 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Right side buttons
         right_buttons = ctk.CTkFrame(button_frame)
         right_buttons.pack(side='right')
-        self.start_button = ctk.CTkButton(right_buttons, text="Start Training", command=self.start_training, **button_style)
-        self.start_button.pack(side='left', padx=5)
+        self.train_button = ctk.CTkButton(right_buttons, 
+                                     text="Start Training", 
+                                     command=self.handle_train_button,
+                                     **button_style)
+        self.train_button.pack(side='left', padx=5)
         
         self.stop_button = ctk.CTkButton(right_buttons, text="Stop Training", command=self.stop_training, 
                                         fg_color="#FF4444", hover_color="#CC3333", state="disabled")
@@ -527,7 +548,6 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.status_label.pack(anchor='w', padx=5)
         
         # Sample tab
-        sample_tab = self.main_notebook.add("Sample")
         sample_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
         
         # Left column for prompt settings
@@ -666,7 +686,6 @@ class FluxTrainingGUI(ctk.CTkFrame):
         }
 
         # Add Batch tab
-        batch_tab = self.main_notebook.add("Batch")
         batch_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
         
         # Left column for batch list
@@ -674,8 +693,8 @@ class FluxTrainingGUI(ctk.CTkFrame):
         batch_left.pack(side='left', fill='both', expand=True, padx=5, pady=5)
         
         # Right column for controls
-        batch_right = ctk.CTkFrame(batch_tab)
-        batch_right.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+        self.batch_right = ctk.CTkFrame(batch_tab)  # Store as instance variable
+        self.batch_right.pack(side='left', fill='both', expand=True, padx=5, pady=5)
         
         # Batch List
         list_frame = ctk.CTkFrame(batch_left)
@@ -690,7 +709,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
         self.batch_listbox.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Batch Controls
-        control_frame = ctk.CTkFrame(batch_right)
+        control_frame = ctk.CTkFrame(self.batch_right)
         control_frame.pack(fill='x', padx=5, pady=5)
         
         # Add current config to batch
@@ -698,6 +717,30 @@ class FluxTrainingGUI(ctk.CTkFrame):
                       text="Add Current Config", 
                       command=self.add_to_batch,
                       **button_style).pack(fill='x', padx=5, pady=2)
+        
+        # Load config to batch
+        ctk.CTkButton(control_frame, 
+                      text="Load Config to Batch", 
+                      command=self.load_config_to_batch,
+                      **button_style).pack(fill='x', padx=5, pady=2)
+        
+        # Reorder buttons frame
+        reorder_frame = ctk.CTkFrame(control_frame)
+        reorder_frame.pack(fill='x', padx=5, pady=2)
+        
+        # Move Up button
+        ctk.CTkButton(reorder_frame, 
+                      text="▲ Move Up",
+                      command=self.move_batch_item_up,
+                      width=100,
+                      **button_style).pack(side='left', expand=True, padx=2)
+        
+        # Move Down button
+        ctk.CTkButton(reorder_frame, 
+                      text="▼ Move Down",
+                      command=self.move_batch_item_down,
+                      width=100,
+                      **button_style).pack(side='left', expand=True, padx=2)
         
         # Remove selected from batch
         ctk.CTkButton(control_frame, 
@@ -718,12 +761,11 @@ class FluxTrainingGUI(ctk.CTkFrame):
                       **button_style).pack(fill='x', padx=5, pady=2)
         
         # Batch status
-        status_frame = ctk.CTkFrame(batch_right)
+        status_frame = ctk.CTkFrame(self.batch_right)
         status_frame.pack(fill='x', padx=5, pady=5)
         ctk.CTkLabel(status_frame, textvariable=self.batch_status_var).pack(anchor='w', padx=5)
 
         # Add Caption Management tab
-        caption_tab = self.main_notebook.add("Captions")
         caption_tab.configure(fg_color=self.themes.get_theme(self.is_dark_mode)['frame'])
         
         # Left column for folder selection and options
@@ -1049,30 +1091,63 @@ class FluxTrainingGUI(ctk.CTkFrame):
                 caption_files.append(os.path.join(folder_path, file))
         
         converted_count = 0
+        failed_count = 0
+        
         for file_path in caption_files:
             try:
-                # Detect the encoding
+                # First try to detect the encoding
                 with open(file_path, 'rb') as file:
                     raw = file.read()
                     result = chardet.detect(raw)
-                    encoding = result['encoding']
+                    detected_encoding = result['encoding'] if result['confidence'] > 0.7 else 'latin-1'
                 
-                # Read with detected encoding and write as UTF-8
-                if encoding and encoding.lower() != 'utf-8':
-                    with open(file_path, 'r', encoding=encoding) as file:
+                # Try to read with detected encoding
+                try:
+                    with open(file_path, 'r', encoding=detected_encoding) as file:
                         content = file.read()
-                    with open(file_path, 'w', encoding='utf-8') as file:
+                except UnicodeDecodeError:
+                    # If that fails, try common encodings
+                    for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
+                        try:
+                            with open(file_path, 'r', encoding=encoding) as file:
+                                content = file.read()
+                                detected_encoding = encoding
+                                break
+                        except UnicodeDecodeError:
+                            continue
+                
+                # Write back as UTF-8 if we successfully read the file
+                if content:
+                    with open(file_path, 'w', encoding='utf-8', errors='ignore') as file:
                         file.write(content)
                     converted_count += 1
+                    self.logger.info(f"Converted {file_path} from {detected_encoding} to UTF-8")
+                else:
+                    failed_count += 1
+                    self.logger.error(f"Failed to read {file_path} with any encoding")
                 
             except Exception as e:
+                failed_count += 1
                 self.logger.error(f"Failed to convert {file_path}: {str(e)}")
+        
+        if failed_count > 0:
+            self.logger.warning(f"Failed to convert {failed_count} files")
         
         return converted_count
 
     def start_training(self):
         """Start training with current configuration"""
         try:
+            # Check if UTF-8 conversion is needed
+            if self.convert_utf8_var.get():
+                data_folder = self.data_folder_var.get()
+                if data_folder and os.path.exists(data_folder):
+                    self.status_var.set("Converting captions to UTF-8...")
+                    converted = self.convert_captions_to_utf8(data_folder)
+                    if converted > 0:
+                        self.logger.info(f"Converted {converted} caption files to UTF-8")
+                    self.status_var.set("UTF-8 conversion completed")
+            
             # Save current UI state to current_train.yaml
             config = self.prepare_config()
             
@@ -1098,13 +1173,6 @@ class FluxTrainingGUI(ctk.CTkFrame):
             if not self.name_var.get():
                 raise ValueError("Please enter a name for the training")
             
-            # Convert captions to UTF-8 if option is enabled
-            self.status_var.set("Converting captions to UTF-8...")
-            data_folder = self.data_folder_var.get()
-            converted = self.convert_captions_to_utf8(data_folder)
-            if converted > 0:
-                self.logger.info(f"Converted {converted} caption files to UTF-8")
-            
             # Start training process with default console output
             self.training_process = subprocess.Popen([
                 paths_config['python_path'],
@@ -1113,7 +1181,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
             ])
             
             # Update button states
-            self.start_button.configure(state="disabled")
+            self.train_button.configure(state="disabled")
             self.stop_button.configure(state="normal")
             
             self.status_var.set("Training started... Check console for progress")
@@ -1140,7 +1208,7 @@ class FluxTrainingGUI(ctk.CTkFrame):
                 self.training_process = None
                 
                 # Update button states
-                self.start_button.configure(state="normal")
+                self.train_button.configure(state="normal")
                 self.stop_button.configure(state="disabled")
                 
                 self.status_var.set("Training stopped by user")
@@ -1864,6 +1932,13 @@ Additional Notes: [any special instructions]"""
             self.batch_status_var.set(f"Added {name} to batch queue")
             self.logger.info(f"Added configuration '{name}' to batch queue")
             
+            # Update button if we're in batch tab
+            if self.current_tab == "Batch":
+                self.train_button.configure(
+                    text="Start Batch Processing",
+                    command=self.start_batch_processing
+                )
+            
         except Exception as e:
             error_msg = f"Failed to add to batch: {str(e)}"
             self.logger.error(error_msg)
@@ -1896,6 +1971,13 @@ Additional Notes: [any special instructions]"""
             self.batch_status_var.set("Batch queue cleared")
             self.logger.info("Batch queue cleared")
             
+            # Update button if we're in batch tab
+            if self.current_tab == "Batch":
+                self.train_button.configure(
+                    text="Start Training",
+                    command=self.start_training
+                )
+            
         except Exception as e:
             error_msg = f"Failed to clear batch: {str(e)}"
             self.logger.error(error_msg)
@@ -1908,6 +1990,14 @@ Additional Notes: [any special instructions]"""
             return
         
         try:
+            # Load paths from config.yaml
+            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
+            if not os.path.exists(config_path):
+                raise FileNotFoundError("config.yaml not found. Please run start.bat first.")
+            
+            with open(config_path, 'r') as f:
+                paths_config = yaml.safe_load(f)
+            
             # Disable batch controls during processing
             self.disable_batch_controls()
             
@@ -1915,31 +2005,62 @@ Additional Notes: [any special instructions]"""
                 name = config['config']['name']
                 self.batch_status_var.set(f"Processing {name} ({i+1}/{len(self.batch_configs)})")
                 
-                # Save current config to temp file
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-                    config_path = f.name
+                try:
+                    # Get dataset folder path
+                    if 'datasets' in config['config']['process'][0]:
+                        data_folder = config['config']['process'][0]['datasets'][0]['folder_path']
+                        
+                        # Check if UTF-8 conversion is needed
+                        convert_utf8 = False
+                        for process in config['config']['process']:
+                            if 'convert_utf8' in process and process['convert_utf8']:
+                                convert_utf8 = True
+                                break
+                        
+                        if convert_utf8 and data_folder and os.path.exists(data_folder):
+                            self.batch_status_var.set(f"Converting captions to UTF-8 for {name}...")
+                            self.logger.info(f"Starting UTF-8 conversion for {name} in folder: {data_folder}")
+                            
+                            try:
+                                converted = self.convert_captions_to_utf8(data_folder)
+                                if converted > 0:
+                                    self.logger.info(f"Converted {converted} caption files to UTF-8 for {name}")
+                                self.batch_status_var.set(f"UTF-8 conversion completed for {name}")
+                            except Exception as e:
+                                self.logger.error(f"UTF-8 conversion failed for {name}: {str(e)}")
+                                raise
                 
-                # Start training process
-                process = subprocess.Popen([
-                    self.python_path,
-                    self.train_script_path,
-                    config_path
-                ])
-                
-                # Wait for process to complete
-                process.wait()
-                
-                # Clean up temp file
-                os.unlink(config_path)
+                    # Save current config to temp file
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+                        config_path = f.name
+                    
+                    # Start training process and wait for completion
+                    process = subprocess.Popen([
+                        paths_config['python_path'],
+                        paths_config['train_script_path'],
+                        config_path
+                    ])
+                    
+                    # Wait for this job to complete before starting next one
+                    process.wait()
+                    
+                    if process.returncode != 0:
+                        raise Exception(f"Training process for {name} failed with return code {process.returncode}")
+                    
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(config_path):
+                        os.unlink(config_path)
             
-            self.batch_status_var.set("Batch processing completed")
-            self.enable_batch_controls()
+            self.batch_status_var.set("Batch processing completed successfully")
+            messagebox.showinfo("Success", "All batch jobs completed")
             
         except Exception as e:
             error_msg = f"Batch processing failed: {str(e)}"
             self.logger.error(error_msg)
             messagebox.showerror("Error", error_msg)
+        finally:
             self.enable_batch_controls()
 
     def disable_batch_controls(self):
@@ -2210,6 +2331,140 @@ Additional Notes: [any special instructions]"""
                 for child in widget.winfo_children():
                     if isinstance(child, (ctk.CTkEntry, ctk.CTkOptionMenu)):
                         child.configure(state="disabled")
+
+    def load_config_to_batch(self):
+        """Load a saved configuration file into the batch queue"""
+        try:
+            # Open file dialog
+            file_path = filedialog.askopenfilename(
+                title="Select Configuration File",
+                filetypes=[
+                    ("YAML files", "*.yaml *.yml"),
+                    ("All files", "*.*")
+                ]
+            )
+            
+            if file_path:
+                # Load the configuration
+                with open(file_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                
+                # Validate basic structure
+                if not isinstance(config, dict) or 'config' not in config:
+                    raise ValueError("Invalid configuration file format")
+                
+                # Get name from config
+                name = config['config'].get('name', os.path.basename(file_path))
+                
+                # Add to batch list
+                self.batch_configs.append(config)
+                self.batch_listbox.insert(tk.END, f"Training: {name}")
+                
+                self.batch_status_var.set(f"Added {name} to batch queue")
+                self.logger.info(f"Loaded configuration '{name}' into batch queue from {file_path}")
+                
+        except Exception as e:
+            error_msg = f"Failed to load configuration: {str(e)}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+
+    def move_batch_item_up(self):
+        """Move selected batch item up in the queue"""
+        try:
+            selection = self.batch_listbox.curselection()
+            if not selection:
+                return
+            
+            index = selection[0]
+            if index == 0:  # Already at top
+                return
+            
+            # Swap items in configs list
+            self.batch_configs[index], self.batch_configs[index-1] = \
+                self.batch_configs[index-1], self.batch_configs[index]
+            
+            # Get item text
+            item_text = self.batch_listbox.get(index)
+            
+            # Delete and reinsert in listbox
+            self.batch_listbox.delete(index)
+            self.batch_listbox.insert(index-1, item_text)
+            
+            # Update selection
+            self.batch_listbox.selection_clear(0, tk.END)
+            self.batch_listbox.selection_set(index-1)
+            self.batch_listbox.see(index-1)
+            
+            self.batch_status_var.set(f"Moved {item_text} up")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to move item up: {str(e)}")
+            messagebox.showerror("Error", "Failed to move item")
+
+    def move_batch_item_down(self):
+        """Move selected batch item down in the queue"""
+        try:
+            selection = self.batch_listbox.curselection()
+            if not selection:
+                return
+            
+            index = selection[0]
+            if index >= len(self.batch_configs) - 1:  # Already at bottom
+                return
+            
+            # Swap items in configs list
+            self.batch_configs[index], self.batch_configs[index+1] = \
+                self.batch_configs[index+1], self.batch_configs[index]
+            
+            # Get item text
+            item_text = self.batch_listbox.get(index)
+            
+            # Delete and reinsert in listbox
+            self.batch_listbox.delete(index)
+            self.batch_listbox.insert(index+1, item_text)
+            
+            # Update selection
+            self.batch_listbox.selection_clear(0, tk.END)
+            self.batch_listbox.selection_set(index+1)
+            self.batch_listbox.see(index+1)
+            
+            self.batch_status_var.set(f"Moved {item_text} down")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to move item down: {str(e)}")
+            messagebox.showerror("Error", "Failed to move item")
+
+    def handle_train_button(self):
+        """Handle train button click based on current tab"""
+        if self.current_tab == "Batch" and self.batch_configs:
+            self.start_batch_processing()
+        else:
+            self.start_training()
+
+    def on_tab_change(self):
+        """Handle tab changes and update button text/function"""
+        try:
+            # Get current tab name from CTkTabview
+            tab_name = self.main_notebook.get()
+            self.current_tab = tab_name
+            
+            if tab_name == "Batch" and self.batch_configs:
+                # In Batch tab with configs queued
+                self.train_button.configure(
+                    text="Start Batch Processing",
+                    command=self.start_batch_processing
+                )
+            else:
+                # In any other tab or no batch configs
+                self.train_button.configure(
+                    text="Start Training",
+                    command=self.start_training
+                )
+            
+            self.logger.debug(f"Changed to {tab_name} tab, updated training button")
+            
+        except Exception as e:
+            self.logger.error(f"Error updating button on tab change: {str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()
