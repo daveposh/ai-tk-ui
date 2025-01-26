@@ -133,8 +133,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Acknowledgments
 
-- Based on the AI-Toolkit project
-- Uses CustomTkinter for modern UI elements
+- Based on [AI-Toolkit](https://github.com/ostris/ai-toolkit) - The core toolkit this UI is built for
+- Uses [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) - Modern UI widgets for tkinter
+- [PyTorch](https://github.com/pytorch/pytorch) - The deep learning framework used
 - Community contributions and feedback
 
 ## Support
