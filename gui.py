@@ -119,6 +119,10 @@ class FluxTrainingGUI(ctk.CTkFrame):
         # Add process tracking
         self.training_process = None
 
+        # Add batch process tracking
+        self.batch_process = None
+        self.stop_batch_flag = False
+
     def setup_logging(self):
         """Setup logging configuration"""
         log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gui.log')
@@ -314,7 +318,8 @@ class FluxTrainingGUI(ctk.CTkFrame):
         batch_tab = self.main_notebook.add("Batch")
         caption_tab = self.main_notebook.add("Captions")
         
-        # Set tab change callback after adding tabs
+        # Set initial tab and configure tab change callback
+        self.current_tab = "Training"  # Set initial tab
         self.main_notebook.configure(command=self.on_tab_change)
         
         # Configure tab colors
@@ -522,17 +527,22 @@ class FluxTrainingGUI(ctk.CTkFrame):
         ctk.CTkButton(left_buttons, text="Load Config", command=self.load_config_file, **button_style).pack(side='left', padx=5)
         ctk.CTkButton(left_buttons, text="Save Config", command=self.save_config, **button_style).pack(side='left', padx=5)
         
-        # Right side buttons
-        right_buttons = ctk.CTkFrame(button_frame)
-        right_buttons.pack(side='right')
-        self.train_button = ctk.CTkButton(right_buttons, 
-                                     text="Start Training", 
-                                     command=self.handle_train_button,
-                                     **button_style)
+        # Right side buttons in their own frame for visibility control
+        self.training_buttons_frame = ctk.CTkFrame(button_frame)
+        self.training_buttons_frame.pack(side='right')
+        
+        self.train_button = ctk.CTkButton(self.training_buttons_frame, 
+                                         text="Start Training", 
+                                         command=self.start_training,
+                                         **button_style)
         self.train_button.pack(side='left', padx=5)
         
-        self.stop_button = ctk.CTkButton(right_buttons, text="Stop Training", command=self.stop_training, 
-                                        fg_color="#FF4444", hover_color="#CC3333", state="disabled")
+        self.stop_button = ctk.CTkButton(self.training_buttons_frame, 
+                                        text="Stop Training", 
+                                        command=self.stop_training, 
+                                        fg_color="#FF4444", 
+                                        hover_color="#CC3333", 
+                                        state="disabled")
         self.stop_button.pack(side='left', padx=5)
         
         # Progress Frame
@@ -708,57 +718,62 @@ class FluxTrainingGUI(ctk.CTkFrame):
                                        fg=self.themes.get_theme(self.is_dark_mode)['text'])
         self.batch_listbox.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Batch Controls
-        control_frame = ctk.CTkFrame(self.batch_right)
-        control_frame.pack(fill='x', padx=5, pady=5)
-        
-        # Add current config to batch
-        ctk.CTkButton(control_frame, 
-                      text="Add Current Config", 
-                      command=self.add_to_batch,
-                      **button_style).pack(fill='x', padx=5, pady=2)
-        
-        # Load config to batch
-        ctk.CTkButton(control_frame, 
-                      text="Load Config to Batch", 
-                      command=self.load_config_to_batch,
-                      **button_style).pack(fill='x', padx=5, pady=2)
-        
-        # Reorder buttons frame
-        reorder_frame = ctk.CTkFrame(control_frame)
+        # Reorder buttons frame under the list
+        reorder_frame = ctk.CTkFrame(list_frame)
         reorder_frame.pack(fill='x', padx=5, pady=2)
         
-        # Move Up button
+        # Move Up/Down buttons
         ctk.CTkButton(reorder_frame, 
                       text="▲ Move Up",
                       command=self.move_batch_item_up,
                       width=100,
                       **button_style).pack(side='left', expand=True, padx=2)
         
-        # Move Down button
         ctk.CTkButton(reorder_frame, 
                       text="▼ Move Down",
                       command=self.move_batch_item_down,
                       width=100,
                       **button_style).pack(side='left', expand=True, padx=2)
         
-        # Remove selected from batch
+        # Batch Controls
+        control_frame = ctk.CTkFrame(self.batch_right)
+        control_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Only batch-specific controls
+        ctk.CTkButton(control_frame, 
+                      text="Add Current Config", 
+                      command=self.add_to_batch,
+                      **button_style).pack(fill='x', padx=5, pady=2)
+        
+        ctk.CTkButton(control_frame, 
+                      text="Load Config to Batch", 
+                      command=self.load_config_to_batch,
+                      **button_style).pack(fill='x', padx=5, pady=2)
+        
+        # Remove and Clear buttons
         ctk.CTkButton(control_frame, 
                       text="Remove Selected", 
                       command=self.remove_from_batch,
                       **button_style).pack(fill='x', padx=5, pady=2)
         
-        # Clear batch
         ctk.CTkButton(control_frame, 
                       text="Clear Batch", 
                       command=self.clear_batch,
                       **button_style).pack(fill='x', padx=5, pady=2)
         
-        # Start batch processing
+        # Add Start Batch button
         ctk.CTkButton(control_frame, 
-                      text="Start Batch Processing", 
+                      text="Start Batch", 
                       command=self.start_batch_processing,
                       **button_style).pack(fill='x', padx=5, pady=2)
+        
+        # Add Stop Batch button
+        self.stop_batch_button = ctk.CTkButton(control_frame, 
+                      text="Stop Batch", 
+                      command=self.stop_batch_processing,
+                      state="disabled",
+                      fg_color="#FF4444",
+                      hover_color="#CC3333").pack(fill='x', padx=5, pady=2)
         
         # Batch status
         status_frame = ctk.CTkFrame(self.batch_right)
@@ -1037,6 +1052,9 @@ class FluxTrainingGUI(ctk.CTkFrame):
                 'guidance_scale': float(self.cfg_scale_var.get()),
                 'sample_steps': int(self.sampling_steps_var.get())
             })
+        
+        # Add convert_utf8 setting from GUI checkbox
+        process_config['convert_utf8'] = self.convert_utf8_var.get()
         
         return config
 
@@ -1933,11 +1951,7 @@ Additional Notes: [any special instructions]"""
             self.logger.info(f"Added configuration '{name}' to batch queue")
             
             # Update button if we're in batch tab
-            if self.current_tab == "Batch":
-                self.train_button.configure(
-                    text="Start Batch Processing",
-                    command=self.start_batch_processing
-                )
+            self.on_tab_change()  # Force button update
             
         except Exception as e:
             error_msg = f"Failed to add to batch: {str(e)}"
@@ -1972,11 +1986,7 @@ Additional Notes: [any special instructions]"""
             self.logger.info("Batch queue cleared")
             
             # Update button if we're in batch tab
-            if self.current_tab == "Batch":
-                self.train_button.configure(
-                    text="Start Training",
-                    command=self.start_training
-                )
+            self.on_tab_change()  # Force button update
             
         except Exception as e:
             error_msg = f"Failed to clear batch: {str(e)}"
@@ -1998,82 +2008,153 @@ Additional Notes: [any special instructions]"""
             with open(config_path, 'r') as f:
                 paths_config = yaml.safe_load(f)
             
+            # Reset stop flag
+            self.stop_batch_flag = False
+            
             # Disable batch controls during processing
             self.disable_batch_controls()
             
-            for i, config in enumerate(self.batch_configs):
+            # Start batch processing in a separate thread
+            batch_thread = threading.Thread(target=self._process_batch_jobs, args=(paths_config,))
+            batch_thread.daemon = True
+            batch_thread.start()
+            
+        except Exception as e:
+            error_msg = f"Failed to start batch processing: {str(e)}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+            self.enable_batch_controls()
+
+    def _process_batch_jobs(self, paths_config):
+        """Process batch jobs in a separate thread"""
+        try:
+            # PHASE 1: Pre-tasks
+            self.master.after(0, lambda: self.batch_status_var.set("Starting pre-tasks phase..."))
+            self.logger.info("Starting batch pre-tasks phase...")
+            
+            # First, check and perform all pre-tasks for all configs
+            for i, config in enumerate(self.batch_configs[:]):
+                if self.stop_batch_flag:
+                    self.master.after(0, lambda: self.batch_status_var.set("Batch processing stopped by user"))
+                    return
+                
                 name = config['config']['name']
-                self.batch_status_var.set(f"Processing {name} ({i+1}/{len(self.batch_configs)})")
+                self.master.after(0, lambda n=name: self.batch_status_var.set(
+                    f"Processing pre-tasks for {n}..."))
+                self.logger.info(f"Processing pre-tasks for {name}...")
+                
+                # Process all pre-tasks for this config
+                for process in config['config'].get('process', []):
+                    # Check for UTF-8 conversion
+                    if process.get('convert_utf8', False):
+                        self.logger.info(f"UTF-8 conversion enabled for {name}")
+                        datasets = process.get('datasets', [])
+                        if datasets:
+                            for dataset in datasets:
+                                data_folder = dataset.get('folder_path')
+                                if data_folder and os.path.exists(data_folder):
+                                    msg = f"Converting captions to UTF-8 for {name} in {data_folder}..."
+                                    self.master.after(0, lambda m=msg: self.batch_status_var.set(m))
+                                    self.logger.info(msg)
+                                    
+                                    try:
+                                        # Actually perform the UTF-8 conversion
+                                        converted = self.convert_captions_to_utf8(data_folder)
+                                        if converted > 0:
+                                            msg = f"Converted {converted} caption files to UTF-8 for {name}"
+                                            self.logger.info(msg)
+                                            self.master.after(0, lambda m=msg: self.batch_status_var.set(m))
+                                        else:
+                                            self.logger.info(f"No caption files needed conversion for {name}")
+                                    except Exception as e:
+                                        self.logger.error(f"UTF-8 conversion failed for {name}: {str(e)}")
+                                        raise
+                                else:
+                                    self.logger.warning(f"Data folder not found for {name}: {data_folder}")
+                        else:
+                            self.logger.warning(f"No datasets found for {name}")
+                    else:
+                        self.logger.info(f"UTF-8 conversion not enabled for {name}")
+            
+            # Confirm all pre-tasks are complete
+            msg = "All pre-tasks completed. Starting training phase..."
+            self.master.after(0, lambda: self.batch_status_var.set(msg))
+            self.logger.info(msg)
+            
+            # PHASE 2: Training
+            for i, config in enumerate(self.batch_configs[:]):
+                if self.stop_batch_flag:
+                    self.master.after(0, lambda: self.batch_status_var.set("Batch processing stopped by user"))
+                    return
+                
+                name = config['config']['name']
+                msg = f"Training {name} ({i+1}/{len(self.batch_configs)})"
+                self.master.after(0, lambda m=msg: self.batch_status_var.set(m))
+                self.logger.info(f"Starting training for {name}")
                 
                 try:
-                    # Get dataset folder path
-                    if 'datasets' in config['config']['process'][0]:
-                        data_folder = config['config']['process'][0]['datasets'][0]['folder_path']
-                        
-                        # Check if UTF-8 conversion is needed
-                        convert_utf8 = False
-                        for process in config['config']['process']:
-                            if 'convert_utf8' in process and process['convert_utf8']:
-                                convert_utf8 = True
-                                break
-                        
-                        if convert_utf8 and data_folder and os.path.exists(data_folder):
-                            self.batch_status_var.set(f"Converting captions to UTF-8 for {name}...")
-                            self.logger.info(f"Starting UTF-8 conversion for {name} in folder: {data_folder}")
-                            
-                            try:
-                                converted = self.convert_captions_to_utf8(data_folder)
-                                if converted > 0:
-                                    self.logger.info(f"Converted {converted} caption files to UTF-8 for {name}")
-                                self.batch_status_var.set(f"UTF-8 conversion completed for {name}")
-                            except Exception as e:
-                                self.logger.error(f"UTF-8 conversion failed for {name}: {str(e)}")
-                                raise
-                
                     # Save current config to temp file
                     with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
                         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
                         config_path = f.name
                     
                     # Start training process and wait for completion
-                    process = subprocess.Popen([
+                    self.batch_process = subprocess.Popen([
                         paths_config['python_path'],
                         paths_config['train_script_path'],
                         config_path
                     ])
                     
                     # Wait for this job to complete before starting next one
-                    process.wait()
+                    self.batch_process.wait()
                     
-                    if process.returncode != 0:
-                        raise Exception(f"Training process for {name} failed with return code {process.returncode}")
+                    if self.batch_process.returncode != 0:
+                        raise Exception(f"Training process for {name} failed with return code {self.batch_process.returncode}")
                     
                 finally:
                     # Clean up temp file
                     if os.path.exists(config_path):
                         os.unlink(config_path)
+                    
+                    # Clear batch process reference
+                    self.batch_process = None
             
-            self.batch_status_var.set("Batch processing completed successfully")
-            messagebox.showinfo("Success", "All batch jobs completed")
+            if not self.stop_batch_flag:
+                msg = "Batch processing completed successfully"
+                self.master.after(0, lambda: [
+                    self.batch_status_var.set(msg),
+                    messagebox.showinfo("Success", "All batch jobs completed")
+                ])
+                self.logger.info(msg)
             
         except Exception as e:
             error_msg = f"Batch processing failed: {str(e)}"
             self.logger.error(error_msg)
-            messagebox.showerror("Error", error_msg)
+            self.master.after(0, lambda: messagebox.showerror("Error", error_msg))
         finally:
-            self.enable_batch_controls()
+            self.master.after(0, self.enable_batch_controls)
 
     def disable_batch_controls(self):
         """Disable batch control buttons during processing"""
         for widget in self.batch_right.winfo_children():
-            if isinstance(widget, ctk.CTkButton):
-                widget.configure(state="disabled")
+            if isinstance(widget, ctk.CTkFrame):
+                for child in widget.winfo_children():
+                    if isinstance(child, ctk.CTkButton):
+                        if "Stop Batch" in str(child.cget("text")):
+                            child.configure(state="normal")  # Enable stop button
+                        else:
+                            child.configure(state="disabled")  # Disable other buttons
 
     def enable_batch_controls(self):
         """Enable batch control buttons after processing"""
         for widget in self.batch_right.winfo_children():
-            if isinstance(widget, ctk.CTkButton):
-                widget.configure(state="normal")
+            if isinstance(widget, ctk.CTkFrame):
+                for child in widget.winfo_children():
+                    if isinstance(child, ctk.CTkButton):
+                        if "Stop Batch" in str(child.cget("text")):
+                            child.configure(state="disabled")  # Disable stop button
+                        else:
+                            child.configure(state="normal")  # Enable other buttons
 
     def browse_caption_folder(self):
         """Browse for folder containing images to caption"""
@@ -2435,36 +2516,52 @@ Additional Notes: [any special instructions]"""
             messagebox.showerror("Error", "Failed to move item")
 
     def handle_train_button(self):
-        """Handle train button click based on current tab"""
-        if self.current_tab == "Batch" and self.batch_configs:
-            self.start_batch_processing()
-        else:
-            self.start_training()
+        """Handle train button click"""
+        self.start_training()
 
-    def on_tab_change(self):
-        """Handle tab changes and update button text/function"""
+    def on_tab_change(self, tab_name=None):
+        """Handle tab changes"""
         try:
-            # Get current tab name from CTkTabview
-            tab_name = self.main_notebook.get()
+            if tab_name is None:
+                tab_name = self.main_notebook.get()
+            
             self.current_tab = tab_name
+            self.logger.debug(f"Tab changed to: {tab_name}")
             
-            if tab_name == "Batch" and self.batch_configs:
-                # In Batch tab with configs queued
-                self.train_button.configure(
-                    text="Start Batch Processing",
-                    command=self.start_batch_processing
-                )
+            # Show/hide training buttons based on tab
+            if tab_name == "Batch":
+                self.training_buttons_frame.pack_forget()
             else:
-                # In any other tab or no batch configs
-                self.train_button.configure(
-                    text="Start Training",
-                    command=self.start_training
-                )
-            
-            self.logger.debug(f"Changed to {tab_name} tab, updated training button")
+                self.training_buttons_frame.pack(side='right')
             
         except Exception as e:
-            self.logger.error(f"Error updating button on tab change: {str(e)}")
+            self.logger.error(f"Error on tab change: {str(e)}")
+
+    def stop_batch_processing(self):
+        """Stop the batch processing"""
+        try:
+            self.stop_batch_flag = True
+            if self.batch_process:
+                # Try to terminate gracefully first
+                self.batch_process.terminate()
+                
+                # Give it a moment to terminate
+                try:
+                    self.batch_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # If it doesn't terminate, force kill
+                    self.batch_process.kill()
+                
+                self.batch_process = None
+            
+            self.batch_status_var.set("Batch processing stopped by user")
+            self.logger.info("Batch processing stopped by user")
+            self.enable_batch_controls()
+            
+        except Exception as e:
+            error_msg = f"Failed to stop batch processing: {str(e)}"
+            self.logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
 
 if __name__ == "__main__":
     root = tk.Tk()
