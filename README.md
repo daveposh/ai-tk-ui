@@ -2,37 +2,12 @@
 
 A modern GUI for AI-Toolkit, making it easier to train and manage your LoRA models.
 
-## Screenshots
+## Acknowledgments
 
-### Main Training Interface
-![Training Tab](screenshots/training_tab.png)
-- Complete training configuration interface
-- Model and dataset settings
-- Network parameters and learning rate options
-
-### Batch Processing
-![Batch Tab](screenshots/batch_tab.png)
-- Queue multiple training jobs
-- Manage training order
-- Monitor batch progress
-
-### Sample Management
-![Sample Tab](screenshots/sample_tab.png)
-- Configure test prompts
-- Set sampling parameters
-- Preview settings
-
-### Caption Management
-![Caption Tab](screenshots/caption_tab.png)
-- Manage training captions
-- UTF-8 conversion tools
-- Template system
-
-### Dark/Light Theme Support
-![Theme Toggle](screenshots/theme_toggle.png)
-- Switch between dark and light modes
-- Modern, responsive design
-- Customizable interface
+- Based on [AI-Toolkit](https://github.com/ostris/ai-toolkit) - The core toolkit this UI is built for
+- Uses [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) - Modern UI widgets for tkinter
+- [PyTorch](https://github.com/pytorch/pytorch) - The deep learning framework used
+- Community contributions and feedback
 
 ## New Features in V2 Branch
 
@@ -77,6 +52,38 @@ A modern GUI for AI-Toolkit, making it easier to train and manage your LoRA mode
 - **Network Settings**: Configure LoRA network parameters
 - **Model Settings**: Configure model paths and options
 - **Dataset Management**: Manage training data and caption files
+
+## Screenshots
+
+### Main Training Interface
+![Training Tab](screenshots/training_tab.png)
+- Complete training configuration interface
+- Model and dataset settings
+- Network parameters and learning rate options
+
+### Batch Processing
+![Batch Tab](screenshots/batch_tab.png)
+- Queue multiple training jobs
+- Manage training order
+- Monitor batch progress
+
+### Sample Management
+![Sample Tab](screenshots/sample_tab.png)
+- Configure test prompts
+- Set sampling parameters
+- Preview settings
+
+### Caption Management
+![Caption Tab](screenshots/caption_tab.png)
+- Manage training captions
+- UTF-8 conversion tools
+- Template system
+
+### Dark/Light Theme Support
+![Theme Toggle](screenshots/theme_toggle.png)
+- Switch between dark and light modes
+- Modern, responsive design
+- Customizable interface
 
 ## Installation
 
@@ -131,13 +138,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Acknowledgments
-
-- Based on [AI-Toolkit](https://github.com/ostris/ai-toolkit) - The core toolkit this UI is built for
-- Uses [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) - Modern UI widgets for tkinter
-- [PyTorch](https://github.com/pytorch/pytorch) - The deep learning framework used
-- Community contributions and feedback
-
 ## Support
 
 For issues and feature requests, please use the GitHub issue tracker.
@@ -155,13 +155,24 @@ The application uses several configuration files:
 - `last_settings.json`: Saves your last used settings
 
 ## Directory Structure
-
-README.md
+```
 ai-tk-ui/
-├── gui.py # Main GUI application
-├── start.bat # Setup and launch script
-├── requirements.txt # Python dependencies
-└── ai-toolkit/ # AI-Toolkit installation (managed by start.bat)
+├── README.md           # Project documentation
+├── gui.py             # Main GUI application
+├── start.bat          # Setup and launch script
+├── requirements.txt   # Python dependencies
+├── config.yaml        # Main configuration file
+├── screenshots/       # GUI screenshots
+│   ├── training_tab.png
+│   ├── batch_tab.png
+│   ├── sample_tab.png
+│   ├── caption_tab.png
+│   └── theme_toggle.png
+└── ai-toolkit/        # AI-Toolkit installation (managed by start.bat)
+    ├── config/
+    ├── models/
+    └── scripts/
+```
 
 ## Usage
 
