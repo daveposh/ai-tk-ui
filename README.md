@@ -2,6 +2,38 @@
 
 A modern GUI for AI-Toolkit, making it easier to train and manage your LoRA models.
 
+## Screenshots
+
+### Main Training Interface
+![Training Tab](screenshots/training_tab.png)
+- Complete training configuration interface
+- Model and dataset settings
+- Network parameters and learning rate options
+
+### Batch Processing
+![Batch Tab](screenshots/batch_tab.png)
+- Queue multiple training jobs
+- Manage training order
+- Monitor batch progress
+
+### Sample Management
+![Sample Tab](screenshots/sample_tab.png)
+- Configure test prompts
+- Set sampling parameters
+- Preview settings
+
+### Caption Management
+![Caption Tab](screenshots/caption_tab.png)
+- Manage training captions
+- UTF-8 conversion tools
+- Template system
+
+### Dark/Light Theme Support
+![Theme Toggle](screenshots/theme_toggle.png)
+- Switch between dark and light modes
+- Modern, responsive design
+- Customizable interface
+
 ## New Features in V2 Branch
 
 ### Batch Processing
